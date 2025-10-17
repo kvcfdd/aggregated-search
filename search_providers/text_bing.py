@@ -1,39 +1,47 @@
 # search_providers/text_bing.py
-import httpx
+from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 import logging
 from config import settings
 
-DEFAULT_BING_URL = "https://www.bing.com"
-BASE_URL = settings.BING_REVERSE_PROXY or DEFAULT_BING_URL
-logging.info(f"Using Bing endpoint: {BASE_URL}")
-
 async def search_bing(query: str, limit: int) -> list[dict]:
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-    }
-    url = f"{BASE_URL}/search?q={query}"
-    
-    try:
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=10.0) as client:
-            response = await client.get(url)
+    DEFAULT_BING_URL = "https://www.bing.com"
+    BASE_URL = settings.BING_REVERSE_PROXY or DEFAULT_BING_URL
+    logging.info(f"Using Bing endpoint: {BASE_URL}")
+    url = f"{BASE_URL}/search?q={query}&mkt=zh-CN"
+
+    # 使用 AsyncSession 并模拟 chrome120，这会自动处理所有指纹和Cookie
+    async with AsyncSession(impersonate="chrome120", timeout=20) as session:
+        try:
+            logging.info(f"Searching Bing with query: '{query}'")
+            response = await session.get(url)
             response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        results = []
-        
-        for item in soup.select('li.b_algo', limit=limit):
-            title_tag = item.select_one('h2 a')
-            snippet_tag = item.select_one('.b_caption p')
+            soup = BeautifulSoup(response.content, 'html.parser')
+            results = []
             
-            if title_tag and snippet_tag:
-                results.append({
-                    "title": title_tag.get_text(),
-                    "link": title_tag.get('href'),
-                    "snippet": snippet_tag.get_text()
-                })
-        return results
-    except Exception as e:
-        logging.error(f"Error searching Bing via {BASE_URL}: {e}")
-        return []
+            for item in soup.select('#b_results > li.b_algo', limit=limit):
+                title_tag = item.select_one('h2 > a')
+                snippet_container = item.select_one('div.b_caption')
+                snippet_text = ""
+
+                if snippet_container:
+                    # 移除摘要中的干扰项
+                    for unwanted in snippet_container.select('.b_vlist2col, .b_tpcn'):
+                        unwanted.decompose()
+                    snippet_text = snippet_container.get_text(" ", strip=True)
+
+                if title_tag:
+                    results.append({
+                        "title": title_tag.get_text(strip=True),
+                        "link": title_tag.get('href'),
+                        "snippet": snippet_text
+                    })
+            
+            if not results:
+                logging.warning(f"Bing search for '{query}' returned 0 results.")
+                
+            return results
+        except Exception as e:
+            logging.error(f"Error searching Bing via {BASE_URL}: {e}", exc_info=True)
+            return []
