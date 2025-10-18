@@ -1,131 +1,288 @@
 # main.py
 import asyncio
 import logging
+import math
+import re
 from typing import Literal
+from urllib.parse import urlparse, urlunparse, parse_qsl
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from config import settings
 from search_providers import text_ddg, text_bing, image_serpapi
 from summarizer import generate_summary
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI(
-    title="Intelligent Search API"
+    title="Intelligent Search API",
+    description="一个聚合多个搜索源、进行智能排序去重并提供AI摘要的API服务。"
 )
 
-class TextSearchResponse(BaseModel):
-    query: str
-    status: Literal['success', 'fallback', 'error']
-    content: str
+#
+# --- 整体流程说明 ---
+# 1. 从多个 provider 并行抓取每源一定数量的搜索结果（由 settings.PER_PROVIDER_FETCH 控制）。
+# 2. 合并所有结果，并进行早期基于原始 link 的快速去重。
+# 3. 使用本地实现的 BM25-like 算法对所有结果计算相关性分数，并据此排序。
+# 4. 按分数降序，使用规范化URL（去除跟踪参数等）进行第二轮精确去重。
+# 5. 尝试调用 AI 模型（Gemini）生成摘要。若成功，直接返回摘要。
+# 6. 若 AI 摘要失败，则对排序后的结果进行基于内容相似度（Jaccard）的第三轮去重，以增加结果多样性。
+# 7. 将最终去重和排序后的前 N 条结果（N=limit）返回给客户端。
+# 8. 所有响应都包装为统一的 JSON 结构 {success, code, message, data}，便于客户端统一处理。
+#
+
+class StandardResponse(BaseModel):
+    success: bool
+    code: int
+    message: str
+    data: dict | list | None = None
 
 class ImageSearchResult(BaseModel):
     title: str | None
     source: str | None
     link: str | None
-    original: str
-    thumbnail: str
+    original: str | None
+    thumbnail: str | None
 
-class ImageSearchResponse(BaseModel):
-    query: str
-    images: list[ImageSearchResult]
-
+# 定义摘要失败的标志性前缀，用于回退判断
 SUMMARY_FAILURE_PREFIXES = [
     "AI summarizer is not configured",
     "AI摘要器未能为此查询生成响应",
     "与AI摘要器通信时发生严重错误",
     "No valid search results found",
+    "与AI摘要器通信时发生HTTP错误",
+    "AI摘要器返回了意外的格式",
 ]
 
+def normalize_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        path = parsed.path or ''
+        # 过滤掉常见的点击跟踪参数
+        query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                       if not k.lower().startswith('utm_') and k.lower() not in ('gclid', 'fbclid')]
+        query = '&'.join([f"{k}={v}" for k, v in query_pairs])
+        netloc = parsed.netloc.lower()
+        # 重新构建不带fragment的URL
+        normalized = urlunparse((parsed.scheme, netloc, path, '', query, ''))
+        return normalized
+    except Exception:
+        # 如果解析失败，返回原始URL的小写形式作为兜底
+        return url.strip().lower()
+
+
+def tokenize(text: str) -> list[str]:
+    """简单的英文/数字分词器"""
+    return [t.lower() for t in re.findall(r"\w+", text) if t]
+
+
+def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, b: float | None = None) -> list[tuple[float, dict]]:
+    docs = [(item.get('title', ''), item.get('snippet', '')) for item in items]
+
+    N = len(docs)
+    doc_tokens, df, doc_lens = [], {}, []
+    
+    # 预处理：分词、计算文档长度和词频
+    for title, snippet in docs:
+        # 为标题中的词赋予更高权重（此处简单地将标题分词重复一次）
+        title_toks = tokenize(title)
+        snippet_toks = tokenize(snippet)
+        tokens = title_toks * 2 + snippet_toks
+        
+        doc_lens.append(len(tokens) or 1)
+        unique_tokens = set(tokens)
+        for t in unique_tokens:
+            df[t] = df.get(t, 0) + 1
+        doc_tokens.append(tokens)
+
+    avgdl = sum(doc_lens) / len(doc_lens) if doc_lens else 1.0
+
+    # 从配置加载 BM25 参数，k1 控制词频饱和度，b 控制文档长度惩罚
+    k1 = k1 if k1 is not None else settings.BM25_K1
+    b = b if b is not None else settings.BM25_B
+    q_terms = tokenize(query)
+    scores = []
+
+    # 计算每个文档的分数
+    for tokens, item, doc_len in zip(doc_tokens, items, doc_lens):
+        score = 0.0
+        for q in q_terms:
+            if q not in df:
+                continue
+            
+            # 使用对数形式计算 IDF，数值更稳定
+            idf = math.log((N - df[q] + 0.5) / (df[q] + 0.5) + 1)
+            
+            # 计算词频 TF
+            tf = tokens.count(q)
+            
+            # BM25核心公式
+            numerator = tf * (k1 + 1)
+            denominator = tf + k1 * (1 - b + b * (doc_len / avgdl))
+            tf_component = numerator / denominator if denominator > 0 else 0.0
+            
+            score += idf * tf_component
+            
+        # 如果查询词出现在URL中，给予少量加分
+        url = (item.get('link') or '').lower()
+        for q_term in q_terms:
+            if q_term in url:
+                score += 0.5
+        scores.append((score, item))
+
+    return scores
+
+
+def jaccard_similarity(a: set, b: set) -> float:
+    """计算两个集合的杰卡德相似度，用于内容去重"""
+    if not a or not b:
+        return 0.0
+    intersection_len = len(a.intersection(b))
+    union_len = len(a.union(b))
+    return intersection_len / union_len
+
+
+def content_dedupe(items: list[dict], threshold: float | None = None) -> list[dict]:
+    threshold = threshold if threshold is not None else settings.CONTENT_DEDUPE_THRESHOLD
+    kept_items = []
+    seen_token_sets = []
+    for item in items:
+        text = ((item.get('title') or '') + ' ' + (item.get('snippet') or '')).lower()
+        tokens = set(tokenize(text))
+        is_duplicate = False
+        for seen_set in seen_token_sets:
+            if jaccard_similarity(seen_set, tokens) >= threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            kept_items.append(item)
+            seen_token_sets.append(tokens)
+    return kept_items
+
 @app.get("/search",
-         summary="Get a structured summary or raw results as a fallback",
-         description="For type='text', returns a JSON object with a status and content. 'status: success' means content is an AI summary. 'status: fallback' means content is concatenated raw search results. For type='image', returns a JSON object of images."
+         summary="执行聚合搜索，优先返回AI摘要",
+         response_model=StandardResponse,
+         description=("执行文本或图片搜索。对于文本搜索，服务会聚合、排序、去重多个来源的结果，"
+                      "并优先尝试生成AI摘要。如果摘要失败，则返回处理后的搜索结果列表。")
 )
 async def search(
-    q: str = Query(..., description="The search query."),
-    type: Literal['text', 'image'] = Query('text', description="Specify 'text' or 'image' search."),
-    limit: int = Query(10, ge=1, le=30, description="The maximum number of search results to fetch.")
+    q: str = Query(..., description="搜索查询词。"),
+    type: Literal['text', 'image'] = Query('text', description="搜索类型：'text' 或 'image'。"),
+    limit: int = Query(10, ge=1, le=30, description="最终返回的结果数量上限。")
 ):
-    if not q:
+    if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty.")
 
     if type == 'image':
         loop = asyncio.get_running_loop()
         image_results_list = await loop.run_in_executor(
-            None, image_serpapi.search_images_serpapi, q, limit * 2
+            None, image_serpapi.search_images_serpapi, q, settings.PER_PROVIDER_FETCH
         )
-        all_images = []
-        seen_originals = set()
+        all_images, seen_originals = [], set()
         for item in image_results_list:
-            if item.get('original') and item['original'] not in seen_originals:
+            original_url = item.get('original')
+            if original_url and original_url not in seen_originals:
                 all_images.append(ImageSearchResult(**item))
-                seen_originals.add(item['original'])
+                seen_originals.add(original_url)
+        
         final_images = all_images[:limit]
-        response_data = ImageSearchResponse(query=q, images=final_images)
-        return JSONResponse(content=response_data.model_dump())
+        response_payload = StandardResponse(
+            success=True, code=200, message="OK",
+            data={"query": q, "images": [img.model_dump() for img in final_images]}
+        )
+        return JSONResponse(content=response_payload.model_dump())
 
     elif type == 'text':
-        tasks = [text_ddg.search_ddg(q, limit), text_bing.search_bing(q, limit)]
+        # 并行获取
+        tasks = [
+            text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH),
+            text_bing.search_bing(q, settings.PER_PROVIDER_FETCH)
+        ]
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
 
-        all_results = []
-        seen_links = set()
+        all_results, seen_links = [], set()
         for result_list in results_from_providers:
             if isinstance(result_list, Exception):
                 logging.error(f"A search provider failed: {result_list}")
                 continue
             for item in result_list:
-                if item.get('link') and item.get('title') and item.get('snippet'):
-                    all_results.append(item)
-                    seen_links.add(item['link'])
+                link = item.get('link')
+                # 过滤无效结果
+                if not all([link, item.get('title'), item.get('snippet')]):
+                    continue
+                # 链接去重
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                all_results.append(item)
         
         if not all_results:
-            return JSONResponse(
-                status_code=404,
-                content=TextSearchResponse(
-                    query=q,
-                    status='error',
-                    content=f"No search results found for the query: '{q}'"
-                ).model_dump()
+            response_payload = StandardResponse(
+                success=False, code=404,
+                message=f"No search results found for the query: '{q}'",
+                data=None
             )
+            return JSONResponse(status_code=404, content=response_payload.model_dump())
 
+        # BM25-like 智能排序
+        scored_results = compute_bm25_scores(all_results, q)
+        scored_results.sort(key=lambda x: x[0], reverse=True)
+
+        # 规范化URL去重
+        deduped_by_url, normalized_seen = [], set()
+        for score, item in scored_results:
+            normalized = normalize_url(item.get('link', ''))
+            if not normalized or normalized in normalized_seen:
+                continue
+            normalized_seen.add(normalized)
+            deduped_by_url.append(item)
+
+        # 尝试生成AI摘要
         summary_text = None
         try:
-            summary_text = await generate_summary(q, all_results)
+            # 将排序后最相关的结果传给摘要器
+            summary_text = await generate_summary(q, deduped_by_url)
         except Exception as e:
-            logging.error(f"Summarization process threw an exception: {e}")
+            logging.error(f"Summarization process threw a critical exception: {e}", exc_info=True)
             summary_text = f"Summarization process failed with an exception: {e}"
 
         is_summary_successful = (
-            summary_text and 
+            summary_text and
             not any(summary_text.startswith(prefix) for prefix in SUMMARY_FAILURE_PREFIXES)
         )
 
         if is_summary_successful:
             logging.info(f"Successfully generated summary for query: '{q}'")
-            response_data = TextSearchResponse(
-                query=q,
-                status='success',
-                content=summary_text
+            response_payload = StandardResponse(
+                success=True, code=200, message="OK",
+                data={"query": q, "summary": summary_text}
             )
-            return JSONResponse(content=response_data.model_dump())
+            return JSONResponse(content=response_payload.model_dump())
         else:
-            logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw text. Reason: {summary_text}")
+            # 回退到返回原始结果列表
+            logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw results. Reason: {summary_text}")
 
-            fallback_parts = []
-            for i, result in enumerate(all_results, 1):
-                fallback_parts.append(f"Source [{i}]:\nTitle: {result['title']}\nSnippet: {result['snippet']}\nURL: {result['link']}")
+            # 内容去重和最终裁剪
+            content_filtered_results = content_dedupe(deduped_by_url)
+            final_results = content_filtered_results[:limit]
             
-            fallback_text = "\n\n".join(fallback_parts)
-            response_data = TextSearchResponse(
-                query=q,
-                status='fallback',
-                content=fallback_text
-            )
-            return JSONResponse(content=response_data.model_dump())
+            fallback_data = []
+            for i, result in enumerate(final_results, 1):
+                fallback_data.append({
+                    "source": i,
+                    "title": result.get('title'),
+                    "description": result.get('snippet'),
+                    "url": result.get('link')
+                })
 
-@app.get("/")
+            response_payload = StandardResponse(
+                success=True, code=200, message="fallback",
+                data={"query": q, "results": fallback_data}
+            )
+            return JSONResponse(content=response_payload.model_dump())
+
+@app.get("/", include_in_schema=False)
 def read_root():
     return {"message": "Welcome to the Intelligent Search API. Go to /docs for API documentation."}
