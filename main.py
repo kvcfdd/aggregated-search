@@ -17,7 +17,7 @@ from summarizer import generate_summary
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI(
-    title="Intelligent Search API",
+    title="aggregated search API",
     description="一个聚合多个搜索源、进行智能排序去重并提供AI摘要的API服务。"
 )
 
@@ -286,4 +286,4 @@ async def search(
 
 @app.get("/", include_in_schema=False)
 def read_root():
-    return {"message": "Welcome to the Intelligent Search API. Go to /docs for API documentation."}
+    return {"message": "Welcome to the aggregated-search API. Go to /docs for API documentation."}

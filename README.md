@@ -56,7 +56,7 @@ curl -X GET "http://127.0.0.1:8000/search?type=text&q=FastAPI最佳实践"
 }
 ```
 
-**回退示例 (message: "fallback")**:
+- **回退示例 (message: "fallback")**:
 
 ```json
 {
