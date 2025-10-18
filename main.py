@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from config import settings
-from search_providers import text_ddg, text_bing, image_serpapi
+from search_providers import text_ddg, text_bing, text_baidu, image_serpapi
 from summarizer import generate_summary
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -198,7 +198,8 @@ async def search(
         # 并行获取
         tasks = [
             text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH),
-            text_bing.search_bing(q, settings.PER_PROVIDER_FETCH)
+            text_bing.search_bing(q, settings.PER_PROVIDER_FETCH),
+            text_baidu.search_baidu(q, settings.PER_PROVIDER_FETCH)
         ]
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
 

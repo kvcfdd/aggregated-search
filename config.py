@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     GEMINI_REVERSE_PROXY: str | None = None
     DDG_REVERSE_PROXY: str | None = None
     BING_REVERSE_PROXY: str | None = None
+    BAIDU_REVERSE_PROXY: str | None = None
     PER_PROVIDER_FETCH: int = 15
     BM25_K1: float = 1.5
     BM25_B: float = 0.75
