@@ -66,9 +66,7 @@ class StandardResponse(BaseModel):
 class ImageSearchResult(BaseModel):
     title: str | None
     source: str | None
-    link: str | None
-    original: str | None
-    thumbnail: str | None
+    url: str | None
 
 # 定义摘要失败的标志性前缀，用于回退判断
 SUMMARY_FAILURE_PREFIXES = [
@@ -89,7 +87,6 @@ def normalize_url(url: str) -> str:
                        if not k.lower().startswith('utm_') and k.lower() not in ('gclid', 'fbclid')]
         query = '&'.join([f"{k}={v}" for k, v in query_pairs])
         netloc = parsed.netloc.lower()
-        # 重新构建不带fragment的URL
         normalized = urlunparse((parsed.scheme, netloc, path, '', query, ''))
         return normalized
     except Exception:
@@ -161,7 +158,7 @@ def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, 
 
 
 def jaccard_similarity(a: set, b: set) -> float:
-    """计算两个集合的杰卡德相似度，用于内容去重"""
+    """去重"""
     if not a or not b:
         return 0.0
     intersection_len = len(a.intersection(b))
@@ -218,7 +215,12 @@ async def search(
             for item in result_list:
                 original_url = item.get('original')
                 if original_url and original_url not in seen_originals:
-                    all_images.append(ImageSearchResult(**item))
+                    image_data = {
+                        "title": item.get("title"),
+                        "source": item.get("source"),
+                        "url": original_url
+                    }
+                    all_images.append(ImageSearchResult(**image_data))
                     seen_originals.add(original_url)
 
         random.shuffle(all_images)
@@ -316,7 +318,7 @@ async def search(
             logging.info(f"Successfully generated summary for query: '{q}'")
             response_payload = StandardResponse(
                 success=True, code=200, message="OK",
-                data={"query": q, "summary": summary_text}
+                data={"query": q, "results": summary_text}
             )
             return JSONResponse(content=response_payload.model_dump())
         else:
@@ -327,18 +329,18 @@ async def search(
             content_filtered_results = content_dedupe(deduped_by_url)
             final_results = content_filtered_results[:limit]
             
-            fallback_data = []
+            i_data = []
             for i, result in enumerate(final_results, 1):
-                fallback_data.append({
-                    "source": i,
+                i_data.append({
+                   # "source": i,
                     "title": result.get('title'),
                     "description": result.get('snippet'),
                     "url": result.get('link')
                 })
 
             response_payload = StandardResponse(
-                success=True, code=200, message="fallback",
-                data={"query": q, "results": fallback_data}
+                success=True, code=200, message="OK",
+                data={"query": q, "results": i_data}
             )
             return JSONResponse(content=response_payload.model_dump())
 

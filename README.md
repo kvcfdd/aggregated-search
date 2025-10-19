@@ -47,7 +47,7 @@
     -   `limit` (int, 可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
     -   `enhance` (string, 可选): 深入请求(百度百科) `'true'` 或 `'false'` (默认 `'false'`)。
 
-    **enhance** 参数会有额外延迟与性能开销
+    **enhance** 参数会有额外轻微延迟与性能开销
 
 -   **请求示例**:
 
@@ -58,12 +58,12 @@
 
     *   **图片搜索**:
         ```bash
-        curl -X GET "http://127.0.0.1:8000/search?type=image&q=风景壁纸&limit=50"
+        curl -X GET "http://127.0.0.1:8000/search?type=image&q=风景壁纸"
         ```
 
 -   **返回示例**:
 
-    *   **文本搜索 - 摘要成功 (`message: "OK"`)**:
+    *   **文本搜索 - 摘要成功**:
         ```json
         {
           "success": true,
@@ -71,28 +71,26 @@
           "message": "OK",
           "data": {
             "query": "FastAPI最佳实践",
-            "summary": "FastAPI 是一个现代、高性能的 Python Web 框架..."
+            "results": "FastAPI 是一个现代、高性能的 Python Web 框架..."
           }
         }
         ```
 
-    *   **文本搜索 - 回退列表 (`message: "fallback"`)**:
+    *   **文本搜索 - 回退列表**:
         ```json
         {
           "success": true,
           "code": 200,
-          "message": "fallback",
+          "message": "OK",
           "data": {
             "query": "FastAPI最佳实践",
             "results": [
               {
-                "source": 1,
                 "title": "FastAPI Best Practices - Real Python",
                 "description": "Learn about the best practices for building robust and maintainable APIs with FastAPI...",
                 "url": "https://realpython.com/fastapi-best-practices/"
               },
               {
-                "source": 2,
                 "title": "A Comprehensive Guide to FastAPI Best Practices - ...",
                 "description": "Explore dependency injection, testing, project structure, and more to build production-ready FastAPI applications.",
                 "url": "https://example.com/fastapi-guide"
@@ -102,7 +100,7 @@
         }
         ```
 
-    *   **图片搜索 - 成功示例 (`type=image`)**:
+    *   **图片搜索 - 成功示例**:
         ```json
         {
           "success": true,
@@ -114,16 +112,12 @@
               {
                 "title": "4K高清唯美风景壁纸 - Pexels",
                 "source": "pexels.com",
-                "link": "https://www.pexels.com/search/landscape/",
-                "original": "https://images.pexels.com/photos/12345/landscape.jpeg",
-                "thumbnail": "https://tse1.mm.bing.net/th?id=OIP.abc...&pid=15.1"
+                "url": "https://images.pexels.com/photos/12345/landscape.jpeg"
               },
               {
                 "title": "瑞士山脉湖泊风景桌面壁纸",
                 "source": "wallpaperhub.app",
-                "link": "https://wallpaperhub.app/wallpapers/123",
-                "original": "https://wallpaperhub.app/images/swiss-mountains.jpg",
-                "thumbnail": "https://tse2.mm.bing.net/th?id=OIP.def...&pid=15.1"
+                "url": "https://wallpaperhub.app/images/swiss-mountains.jpg"
               }
             ]
           }
