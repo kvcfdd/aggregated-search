@@ -1,4 +1,5 @@
 # main.py
+import jieba
 import asyncio
 import logging
 import math
@@ -18,6 +19,7 @@ import http_clients
 from config import settings
 from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing
 from summarizer import generate_summary
+from page_parser import fetch_baike_content
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -95,8 +97,9 @@ def normalize_url(url: str) -> str:
 
 
 def tokenize(text: str) -> list[str]:
-    """简单的英文/数字分词器"""
-    return [t.lower() for t in re.findall(r"\w+", text) if t]
+    """使用 jieba 进行中英文混合分词"""
+    tokens = jieba.cut_for_search(text)
+    return [t.lower() for t in tokens if len(t.strip()) > 1]
 
 
 def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, b: float | None = None) -> list[tuple[float, dict]]:
@@ -191,7 +194,8 @@ def content_dedupe(items: list[dict], threshold: float | None = None) -> list[di
 async def search(
     q: str = Query(..., description="搜索查询词。"),
     type: Literal['text', 'image'] = Query('text', description="搜索类型：'text' 或 'image'。"),
-    limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。")
+    limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。"),
+    enhance: bool = Query(False, description="是否百度百科内容增强，会增加响应时间。")
 ):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty.")
@@ -268,6 +272,30 @@ async def search(
             normalized_seen.add(normalized)
             deduped_by_url.append(item)
 
+        baike_items = [item for item in deduped_by_url if "baike.baidu.com" in item.get('link', '')]
+        other_items = [item for item in deduped_by_url if "baike.baidu.com" not in item.get('link', '')]
+        # 重新组合列表，百科来源的在最前面
+        deduped_by_url = baike_items + other_items
+
+        if enhance:      
+            top_results_to_enhance = deduped_by_url[:1]
+            tasks = []
+            
+            for item in top_results_to_enhance:
+                link = item.get('link', '')
+                if "baike.baidu.com" in link:
+                    tasks.append(fetch_baike_content(link))
+                else:
+                    tasks.append(asyncio.sleep(0, result=None))
+            
+            if tasks:
+                enhanced_contents = await asyncio.gather(*tasks)
+
+                for i, new_content in enumerate(enhanced_contents):
+                    if new_content:
+                        original_snippet = top_results_to_enhance[i]['snippet']
+                        top_results_to_enhance[i]['snippet'] = new_content
+                        logging.info(f"成功将结果 {i} 的摘要替换为百科全文。长度从 {len(original_snippet)} 变为 {len(new_content)}。")
         # 尝试生成AI摘要
         summary_text = None
         try:

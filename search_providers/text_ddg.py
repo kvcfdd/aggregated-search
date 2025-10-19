@@ -12,13 +12,21 @@ logging.info(f"Using DuckDuckGo endpoint: {BASE_URL}")
 async def search_ddg(query: str, limit: int | None = None) -> list[dict]:
     if limit is None:
         limit = settings.PER_PROVIDER_FETCH_TEXT
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    }
+    
     q_enc = quote_plus(query)
     url = f"{BASE_URL}/html/?q={q_enc}"
     
     try:
         client = get_httpx_client()
         logging.info(f"Searching DDG with query: '{query}' (limit={limit})")
-        response = await client.get(url)
+
+        response = await client.get(url, headers=headers)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -31,7 +39,7 @@ async def search_ddg(query: str, limit: int | None = None) -> list[dict]:
                 href = title_tag.get('href')
                 if href and href.startswith('/'):
                     href = BASE_URL.rstrip('/') + href
-                    results.append({
+                results.append({
                     "title": title_tag.text.strip(),
                     "link": href,
                     "snippet": snippet_tag.text.strip()

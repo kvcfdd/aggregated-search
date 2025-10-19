@@ -33,8 +33,8 @@ async def generate_summary(query: str, search_results: list[dict]) -> str:
 
     current_time_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     prompt = (
-        f"当前日期和时间 (用于判断内容时效性): {current_time_utc}\n\n"
-        "请使用中文给提供的内容进行信息融合,过滤无用信息,直接输出,不要加开头,注意细节完整度。\n\n"
+        "请使用中文给提供的内容进行信息融合,直接输出,不要加开头,注意细节完整度。\n\n"
+        f"并根据当前时间判断内容时效性: {current_time_utc},过滤无用信息\n\n"
         f"USER'S QUERY: \"{query}\"\n\n"
         "--- 原始内容 ---\n"
         f"{context}"

@@ -45,6 +45,9 @@
     -   `q` (string, **必需**): 查询词。
     -   `type` (string, 可选): `'text'` 或 `'image'` (默认 `'text'`)。
     -   `limit` (int, 可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
+    -   `enhance` (string, 可选): 深入请求(百度百科) `'true'` 或 `'false'` (默认 `'false'`)。
+
+    **enhance** 参数会有额外延迟与性能开销
 
 -   **请求示例**:
 
