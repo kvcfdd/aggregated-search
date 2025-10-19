@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 import re
+import random
 from contextlib import asynccontextmanager
 from typing import Literal
 from urllib.parse import urlparse, urlunparse, parse_qsl
@@ -220,6 +221,7 @@ async def search(
                     all_images.append(ImageSearchResult(**item))
                     seen_originals.add(original_url)
 
+        random.shuffle(all_images)
         final_images = all_images[:limit]
         response_payload = StandardResponse(
             success=True, code=200, message="OK",
