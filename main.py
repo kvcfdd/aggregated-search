@@ -3,6 +3,7 @@ import asyncio
 import logging
 import math
 import re
+from contextlib import asynccontextmanager
 from typing import Literal
 from urllib.parse import urlparse, urlunparse, parse_qsl
 
@@ -10,28 +11,48 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from httpx import AsyncClient
+from curl_cffi.requests import AsyncSession
+import http_clients
+
 from config import settings
-from search_providers import text_ddg, text_bing, text_baidu, image_serpapi
+from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing
 from summarizer import generate_summary
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.info("Application startup: Initializing HTTP clients...")
+    # 实例化全局客户端
+    http_clients.httpx_client = AsyncClient(
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        },
+        follow_redirects=True,
+        timeout=15  # 超时
+    )
+    http_clients.cffi_session = AsyncSession(
+        impersonate="chrome120",
+        timeout=20  # 超时
+    )
+    logging.info("HTTP clients initialized successfully.")
+
+    yield
+
+    logging.info("Application shutdown: Closing HTTP clients...")
+    if http_clients.httpx_client:
+        await http_clients.httpx_client.aclose()
+    if http_clients.cffi_session:
+        await http_clients.cffi_session.close()
+    logging.info("HTTP clients closed gracefully.")
+
+
 app = FastAPI(
     title="aggregated search API",
-    description="一个聚合多个搜索源、进行智能排序去重并提供AI摘要的API服务。"
+    description="一个聚合多个搜索源、进行智能排序去重并提供AI摘要的API服务。",
+    lifespan=lifespan
 )
-
-#
-# --- 整体流程说明 ---
-# 1. 从多个 provider 并行抓取每源一定数量的搜索结果（由 settings.PER_PROVIDER_FETCH 控制）。
-# 2. 合并所有结果，并进行早期基于原始 link 的快速去重。
-# 3. 使用本地实现的 BM25-like 算法对所有结果计算相关性分数，并据此排序。
-# 4. 按分数降序，使用规范化URL（去除跟踪参数等）进行第二轮精确去重。
-# 5. 尝试调用 AI 模型（Gemini）生成摘要。若成功，直接返回摘要。
-# 6. 若 AI 摘要失败，则对排序后的结果进行基于内容相似度（Jaccard）的第三轮去重，以增加结果多样性。
-# 7. 将最终去重和排序后的前 N 条结果（N=limit）返回给客户端。
-# 8. 所有响应都包装为统一的 JSON 结构 {success, code, message, data}，便于客户端统一处理。
-#
 
 class StandardResponse(BaseModel):
     success: bool
@@ -113,7 +134,7 @@ def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, 
                 continue
             
             # 使用对数形式计算 IDF，数值更稳定
-            idf = math.log((N - df[q] + 0.5) / (df[q] + 0.5) + 1)
+            idf = math.log(1 + (N - df[q] + 0.5) / (df[q] + 0.5))
             
             # 计算词频 TF
             tf = tokens.count(q)
@@ -170,23 +191,31 @@ def content_dedupe(items: list[dict], threshold: float | None = None) -> list[di
 async def search(
     q: str = Query(..., description="搜索查询词。"),
     type: Literal['text', 'image'] = Query('text', description="搜索类型：'text' 或 'image'。"),
-    limit: int = Query(10, ge=1, le=30, description="最终返回的结果数量上限。")
+    limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。")
 ):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty.")
 
     if type == 'image':
-        loop = asyncio.get_running_loop()
-        image_results_list = await loop.run_in_executor(
-            None, image_serpapi.search_images_serpapi, q, settings.PER_PROVIDER_FETCH
-        )
-        all_images, seen_originals = [], set()
-        for item in image_results_list:
-            original_url = item.get('original')
-            if original_url and original_url not in seen_originals:
-                all_images.append(ImageSearchResult(**item))
-                seen_originals.add(original_url)
+        tasks = [
+            image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
+            image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE)
+        ]
         
+        results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        all_images, seen_originals = [], set()
+        for result_list in results_from_providers:
+            if isinstance(result_list, Exception):
+                logging.error(f"An image search provider failed: {result_list}")
+                continue
+            
+            for item in result_list:
+                original_url = item.get('original')
+                if original_url and original_url not in seen_originals:
+                    all_images.append(ImageSearchResult(**item))
+                    seen_originals.add(original_url)
+
         final_images = all_images[:limit]
         response_payload = StandardResponse(
             success=True, code=200, message="OK",
@@ -195,11 +224,10 @@ async def search(
         return JSONResponse(content=response_payload.model_dump())
 
     elif type == 'text':
-        # 并行获取
         tasks = [
-            text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH),
-            text_bing.search_bing(q, settings.PER_PROVIDER_FETCH),
-            text_baidu.search_baidu(q, settings.PER_PROVIDER_FETCH)
+            text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH_TEXT),
+            text_bing.search_bing(q, settings.PER_PROVIDER_FETCH_TEXT),
+            text_baidu.search_baidu(q, settings.PER_PROVIDER_FETCH_TEXT)
         ]
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
 

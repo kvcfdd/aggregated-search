@@ -1,10 +1,13 @@
 # search_providers/image_serpapi.py
-from serpapi import GoogleSearch
-from config import settings
 import logging
 import threading
+from config import settings
+from http_clients import get_httpx_client
+import httpx
 
-# 从配置中加载 SerpApi 密钥列表
+# SerpApi
+SERPAPI_BASE_URL = "https://serpapi.com/search"
+
 serpapi_keys = []
 if settings.SERPAPI_API_KEYS and "default" not in settings.SERPAPI_API_KEYS:
     serpapi_keys = [key.strip() for key in settings.SERPAPI_API_KEYS.split(',')]
@@ -21,23 +24,33 @@ def get_next_serpapi_key() -> str | None:
         key_index = (key_index + 1) % len(serpapi_keys)
         return key_to_use
 
-def search_images_serpapi(query: str, limit: int = 15) -> list[dict]:
+async def search_images_serpapi(query: str, limit: int | None = None) -> list[dict]:
+    if limit is None:
+        limit = settings.PER_PROVIDER_FETCH_IMAGE
     api_key = get_next_serpapi_key()
     if not api_key:
         logging.error("SerpApi API keys not configured or list is empty. Image search is disabled.")
         return []
 
+    # 获取全局共享的 httpx 客户端
+    client = get_httpx_client()
+    
+    # 构建请求参数
     params = {
         "q": query,
         "engine": "google_images",
         "api_key": api_key,
-        "num": limit
+        "num": limit,
+        "output": "json"
     }
     
     try:
         logging.info(f"Searching images with SerpApi key ending in '...{api_key[-4:]}'.")
-        search = GoogleSearch(params)
-        results = search.get_dict()
+
+        response = await client.get(SERPAPI_BASE_URL, params=params)
+        response.raise_for_status()
+        
+        results = response.json()
         
         image_results = []
         if 'images_results' in results:
@@ -50,6 +63,11 @@ def search_images_serpapi(query: str, limit: int = 15) -> list[dict]:
                     "thumbnail": item.get("thumbnail"),
                 })
         return image_results
+        
+    # 捕获 httpx 可能抛出的特定异常
+    except httpx.HTTPStatusError as e:
+        logging.error(f"HTTP error from SerpApi: {e.response.status_code} - {e.response.text}", exc_info=True)
+        return []
     except Exception as e:
-        logging.error(f"Error searching images with SerpApi: {e}", exc_info=True)
+        logging.error(f"Error searching images with SerpApi via httpx: {e}", exc_info=True)
         return []
