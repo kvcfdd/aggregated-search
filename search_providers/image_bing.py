@@ -99,5 +99,5 @@ async def search_bing_images(query: str, limit: int | None = None) -> list[dict]
         return all_results[:limit]
 
     except Exception as e:
-        logging.error(f"Error searching Bing Images via {BASE_URL}: {e}", exc_info=True)
+        logging.warning(f"Failed to fetch results from Bing via {BASE_URL}. Reason: {e}")
         return []

@@ -66,8 +66,8 @@ async def search_images_serpapi(query: str, limit: int | None = None) -> list[di
         
     # 捕获 httpx 可能抛出的特定异常
     except httpx.HTTPStatusError as e:
-        logging.error(f"HTTP error from SerpApi: {e.response.status_code} - {e.response.text}", exc_info=True)
+        logging.error(f"HTTP error from SerpApi: {e.response.status_code} - {e.response.text}")
         return []
     except Exception as e:
-        logging.error(f"Error searching images with SerpApi via httpx: {e}", exc_info=True)
+        logging.warning(f"Failed to fetch results from serpapi via {SERPAPI_BASE_URL}. Reason: {e}")
         return []

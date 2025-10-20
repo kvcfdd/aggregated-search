@@ -24,19 +24,6 @@
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
     ```
 
-### 数据源说明
-
-本服务聚合了以下搜索源：
-
--   **信息搜索**:
-    -   DuckDuckGo
-    -   必应 (Bing)
-    -   百度 (Baidu)
-
--   **图片搜索**:
-    -   SerpApi (Google Images)
-    -   必应图片 (Bing Images)
-
 ### API 概览
 
 #### `GET /search`

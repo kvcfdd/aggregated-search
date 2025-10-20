@@ -209,7 +209,7 @@ async def search(
         all_images, seen_originals = [], set()
         for result_list in results_from_providers:
             if isinstance(result_list, Exception):
-                logging.error(f"An image search provider failed: {result_list}")
+                logging.warning(f"An image search provider failed: {result_list}")
                 continue
             
             for item in result_list:
@@ -242,7 +242,7 @@ async def search(
         all_results, seen_links = [], set()
         for result_list in results_from_providers:
             if isinstance(result_list, Exception):
-                logging.error(f"A search provider failed: {result_list}")
+                logging.warning(f"A search provider failed: {result_list}")
                 continue
             for item in result_list:
                 link = item.get('link')

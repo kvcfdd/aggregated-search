@@ -46,5 +46,5 @@ async def search_ddg(query: str, limit: int | None = None) -> list[dict]:
                 })
         return results
     except Exception as e:
-        logging.error(f"Error searching DuckDuckGo via {BASE_URL}: {e}", exc_info=True)
+        logging.warning(f"Failed to fetch results from DuckDuckGo via {BASE_URL}. Reason: {e}")
         return []

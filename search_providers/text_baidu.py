@@ -72,5 +72,5 @@ async def search_baidu(query: str, limit: int | None = None) -> list[dict]:
         return final_results[:limit]
 
     except Exception as e:
-        logging.error(f"Error searching Baidu via {base_url}: {e}", exc_info=True)
+        logging.warning(f"Failed to fetch results from baidu via {base_url}. Reason: {e}")
         return []
