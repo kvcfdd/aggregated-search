@@ -18,7 +18,7 @@ from curl_cffi.requests import AsyncSession
 import http_clients
 
 from config import settings
-from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing
+from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing, image_pixiv
 from summarizer import generate_summary
 from page_parser import fetch_baike_content
 
@@ -201,7 +201,8 @@ async def search(
     if type == 'image':
         tasks = [
             image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
-            image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE)
+            image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
+            image_pixiv.search_pixiv_images(q, settings.PER_PROVIDER_FETCH_IMAGE)
         ]
         
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
