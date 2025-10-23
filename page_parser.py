@@ -1,6 +1,6 @@
 # page_parser.py
 import logging
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from http_clients import get_cffi_session
 
 async def fetch_baike_content(url: str) -> str | None:
@@ -21,20 +21,40 @@ async def fetch_baike_content(url: str) -> str | None:
         soup = BeautifulSoup(response.content, 'html.parser')
 
         summary_div = soup.select_one('div.lemmaSummary_vu0OO')
-
         if not summary_div:
             return None
 
         for sup in summary_div.select('sup'):
             sup.decompose()
-
         summary_text = summary_div.get_text(separator='\n', strip=True)
         
-        if summary_text:
-            return summary_text
-        else:
-            return None
+        all_content_parts = [summary_text]
+
+        first_heading = soup.select_one("div.paraTitle_A4zIw.level-1_vALZK")
+
+        if first_heading:
+            heading_text = first_heading.get_text(strip=True)
+            if heading_text:
+                all_content_parts.append(heading_text)
+
+            for sibling in first_heading.find_next_siblings():
+                if not isinstance(sibling, Tag):
+                    continue
+
+                if 'level-1_vALZK' in sibling.get('class', []):
+                    break
+
+                for sup in sibling.select('sup'):
+                    sup.decompose()
+
+                sibling_text = sibling.get_text(separator='\n', strip=True)
+                if sibling_text:
+                    all_content_parts.append(sibling_text)
+
+        full_content = "\n\n".join(filter(None, all_content_parts))
+        
+        return full_content if full_content else None
 
     except Exception as e:
-        logging.error(f"抓取或解析百科页面 {url} 时发生严重错误: {e}", exc_info=True)
+        logging.warning(f"解析百科页面 {url} 时发生严重错误: {e}")
         return None
