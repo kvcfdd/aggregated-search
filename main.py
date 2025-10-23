@@ -121,10 +121,18 @@ def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, 
 
     avgdl = sum(doc_lens) / len(doc_lens) if doc_lens else 1.0
 
-    # 从配置加载 BM25 参数，k1 控制词频饱和度，b 控制文档长度惩罚
+    # 从配置加载 BM25
     k1 = k1 if k1 is not None else settings.BM25_K1
     b = b if b is not None else settings.BM25_B
     q_terms = tokenize(query)
+
+    penalty_keywords = {
+        kw.strip().lower() 
+        for kw in settings.TITLE_PENALTY_KEYWORDS.split(',') 
+        if kw.strip()
+    }
+    penalty_value = settings.TITLE_PENALTY_VALUE
+
     scores = []
 
     # 计算每个文档的分数
@@ -152,6 +160,12 @@ def compute_bm25_scores(items: list[dict], query: str, k1: float | None = None, 
         for q_term in q_terms:
             if q_term in url:
                 score += 0.5
+        if penalty_keywords:
+            title = item.get('title', '').lower()
+            for keyword in penalty_keywords:
+                if keyword in title:
+                    score -= penalty_value
+                    break
         scores.append((score, item))
 
     return scores

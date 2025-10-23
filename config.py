@@ -25,5 +25,6 @@ class Settings(BaseSettings):
     BM25_K1: float = 1.5
     BM25_B: float = Field(0.75, ge=0.0, le=1.0)
     CONTENT_DEDUPE_THRESHOLD: float = Field(0.75, ge=0.0, le=1.0)
-
+    TITLE_PENALTY_KEYWORDS: str = ""
+    TITLE_PENALTY_VALUE: float = 2.0
 settings = Settings()
