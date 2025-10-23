@@ -58,3 +58,34 @@ async def fetch_baike_content(url: str) -> str | None:
     except Exception as e:
         logging.warning(f"解析百科页面 {url} 时发生严重错误: {e}")
         return None
+
+async def fetch_and_clean_page_content(url: str) -> str | None:
+    session = get_cffi_session()
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    }
+    try:
+        logging.info(f"正在进行深度请求，抓取通用页面: {url}")
+        response = await session.get(url, headers=headers, impersonate="edge101", timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # 移除脚本、样式、导航、页眉页脚等噪音元素
+        for element in soup(["script", "style", "header", "footer", "nav", "aside"]):
+            element.decompose()
+
+        # 获取body中的文本，移除所有HTML标签
+        body = soup.body
+        if body:
+            # 使用空格作为分隔符，避免单词错误地连接在一起
+            text = body.get_text(separator=' ', strip=True)
+            return text
+        
+        return None
+
+    except Exception as e:
+        logging.warning(f"解析通用页面 {url} 时发生严重错误: {e}")
+        return None

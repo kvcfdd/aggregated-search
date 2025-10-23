@@ -20,7 +20,7 @@ import http_clients
 from config import settings
 from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing, image_pixiv, image_yandex
 from summarizer import generate_summary
-from page_parser import fetch_baike_content
+from page_parser import fetch_baike_content, fetch_and_clean_page_content
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -193,7 +193,7 @@ async def search(
     q: str = Query(..., description="搜索查询词。"),
     type: Literal['text', 'image'] = Query('text', description="搜索类型：'text' 或 'image'。"),
     limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。"),
-    enhance: bool = Query(False, description="是否百度百科内容增强，会增加响应时间。")
+    enhance: bool = Query(False, description="是否进行内容增强。如果结果中存在百度百科，则优先增强；否则，尝试增强排名第一的结果。此过程会增加响应时间。")
 ):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty.")
@@ -241,6 +241,8 @@ async def search(
         ]
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
 
+        blacklist = {domain.strip() for domain in settings.DOMAIN_BLACKLIST.split(',') if domain.strip()}
+
         all_results, seen_links = [], set()
         for result_list in results_from_providers:
             if isinstance(result_list, Exception):
@@ -251,6 +253,17 @@ async def search(
                 # 过滤无效结果
                 if not all([link, item.get('title'), item.get('snippet')]):
                     continue
+
+                # 检查域名是否在黑名单中
+                if blacklist:
+                    try:
+                        domain = urlparse(link).netloc.lower()
+                        if domain and any(blacklisted_domain in domain for blacklisted_domain in blacklist):
+                            logging.info(f"已根据本地配置的黑名单过滤结果: {link}")
+                            continue
+                    except Exception as e:
+                        logging.debug(f"无法为黑名单检查解析域名 {link}: {e}")
+                
                 # 链接去重
                 if link in seen_links:
                     continue
@@ -283,25 +296,29 @@ async def search(
         # 重新组合列表，百科来源的在最前面
         deduped_by_url = baike_items + other_items
 
-        if enhance:      
-            top_results_to_enhance = deduped_by_url[:1]
-            tasks = []
-            
-            for item in top_results_to_enhance:
-                link = item.get('link', '')
-                if "baike.baidu.com" in link:
-                    tasks.append(fetch_baike_content(link))
-                else:
-                    tasks.append(asyncio.sleep(0, result=None))
-            
-            if tasks:
-                enhanced_contents = await asyncio.gather(*tasks)
+        if enhance and deduped_by_url:
+            item_to_enhance = None
+            task_to_run = None
+            if baike_items:
+                item_to_enhance = baike_items[0]
+                link = item_to_enhance.get('link', '')
+                task_to_run = fetch_baike_content(link)
+                logging.info(f"增强模式: 发现百科链接，尝试抓取 {link}")
+            else:
+                item_to_enhance = deduped_by_url[0]
+                link = item_to_enhance.get('link', '')
+                task_to_run = fetch_and_clean_page_content(link)
+                logging.info(f"增强模式: 未发现百科链接，尝试对首个结果进行深度请求: {link}")
 
-                for i, new_content in enumerate(enhanced_contents):
-                    if new_content:
-                        original_snippet = top_results_to_enhance[i]['snippet']
-                        top_results_to_enhance[i]['snippet'] = new_content
-                        logging.info(f"成功将结果 {i} 的摘要替换为百科全文。长度从 {len(original_snippet)} 变为 {len(new_content)}。")
+            if task_to_run and item_to_enhance:
+                enhanced_content = await task_to_run
+                if enhanced_content:
+                    original_snippet = item_to_enhance.get('snippet', '')
+                    item_to_enhance['snippet'] = enhanced_content
+                    logging.info(f"成功增强结果。内容长度从 {len(original_snippet)} 变为 {len(enhanced_content)}。")
+                else:
+                    logging.warning(f"增强任务未能从 {item_to_enhance.get('link')} 获取到内容。")
+
         # 尝试生成AI摘要
         summary_text = None
         try:
