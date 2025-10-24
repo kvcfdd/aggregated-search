@@ -14,7 +14,7 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-async def generate_summary(query: str, search_results: list[dict]) -> str:
+async def generate_summary(query: str, search_results: list[dict]) -> dict | str:
     if not settings.GOOGLE_API_KEY or "default" in settings.GOOGLE_API_KEY:
         return "AI summarizer is not configured. Please provide a GOOGLE_API_KEY."
 
@@ -22,29 +22,43 @@ async def generate_summary(query: str, search_results: list[dict]) -> str:
     api_url = f"{GEMINI_API_BASE_URL}/v1beta/models/{model_name}:generateContent"
     
     context = ""
+    sources_for_model = []
     for i, result in enumerate(search_results[:10], 1):
         title = clean_text(result.get('title', ''))
         snippet = clean_text(result.get('snippet', ''))
-        if title and snippet:
-            context += f"Source [{i}]:\nTitle: {title}\nSnippet: {snippet}\n\n"
+        link = result.get('link')
+        
+        if title and snippet and link:
+            context += f"Source [{i}]:\nTitle: {title}\nURL: {link}\nContent: {snippet}\n\n"
+            sources_for_model.append({
+                "id": i,
+                "title": title,
+                "url": link
+            })
 
     if not context:
         return "No valid search results found to generate a summary."
 
     current_time_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
     prompt = (
-        "请使用中文给提供的内容进行信息融合,直接输出,不要加开头,注意细节完整度。\n\n"
-        f"并根据当前时间判断内容时效性: {current_time_utc},过滤无用信息\n\n"
+        "You are a professional information synthesis AI. Your task is to provide a comprehensive and factual summary based ONLY on the provided sources. Follow these instructions strictly:\n"
+        "1.  Synthesize the information from the sources to answer the user's query.\n"
+        "2.  **Crucially, you MUST cite the sources for every piece of information you include.** Append the source number in square brackets at the end of each sentence or claim, like `[1]` or `[2, 3]`.\n"
+        "3.  If multiple sources support a statement, include all relevant citations.\n"
+        "4.  Do not introduce any information that is not present in the provided sources. Your response must be grounded in the text.\n"
+        "5.  The response language must be Chinese.\n\n"
         f"USER'S QUERY: \"{query}\"\n\n"
-        "--- 原始内容 ---\n"
+        f"CURRENT TIME (for context on timeliness): {current_time_utc}\n\n"
+        "--- PROVIDED SOURCES ---\n"
         f"{context}"
-        "--- END OF SEARCH RESULTS ---\n\n"
-        "SYNTHESIZED SUMMARY:"
+        "--- END OF SOURCES ---\n\n"
+        "SYNTHESIZED SUMMARY WITH CITATIONS:"
     )
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 8192},
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -59,7 +73,6 @@ async def generate_summary(query: str, search_results: list[dict]) -> str:
 
     for attempt in range(2):
         try:
-            # 使用全局客户端
             response = await client.post(api_url, headers=headers, params=params, json=payload)
             response.raise_for_status()
 
@@ -72,9 +85,12 @@ async def generate_summary(query: str, search_results: list[dict]) -> str:
                     if content and isinstance(content, dict):
                         parts = content.get('parts', [])
                         if parts and isinstance(parts, list) and parts[0].get('text'):
-                            return parts[0]['text'].strip()
-                if 'text' in response_data and isinstance(response_data['text'], str):
-                    return response_data['text'].strip()
+                            summary_text = parts[0]['text'].strip()
+                            return {
+                                "summary": summary_text,
+                                "sources": sources_for_model
+                            }
+
             logging.warning(f"Gemini response structure was unexpected: {response_data}")
             return "AI摘要器返回了意外的格式。"
 
@@ -83,10 +99,12 @@ async def generate_summary(query: str, search_results: list[dict]) -> str:
             body = e.response.text if e.response else "No response body"
             logging.error(f"HTTP error from Gemini API ({api_url}): {status} - {body}")
             if status and 500 <= status < 600 and attempt == 0:
+                logging.info("Retrying due to server-side error from Gemini API...")
                 continue
             return f"与AI摘要器通信时发生HTTP错误: {status}"
         except Exception as e:
-            logging.error(f"Critical error in direct Gemini call ({api_url}) for query '{query}': {e}", exc_info=True)
+            logging.error(f"Critical error in Gemini call ({api_url}) for query '{query}': {e}", exc_info=True)
             if attempt == 0:
+                logging.info("Retrying due to a critical error...")
                 continue
             return f"与AI摘要器通信时发生严重错误: {e}"

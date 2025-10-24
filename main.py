@@ -58,7 +58,6 @@ app = FastAPI(
 )
 
 class StandardResponse(BaseModel):
-    success: bool
     code: int
     message: str
     data: dict | list | None = None
@@ -68,6 +67,14 @@ class ImageSearchResult(BaseModel):
     source: str | None
     url: str | None
 
+class Source(BaseModel):
+    id: int
+    title: str | None
+    url: str | None
+
+class SummaryResult(BaseModel):
+    summary: str
+    sources: list[Source]
 # 定义摘要失败的标志性前缀，用于回退判断
 SUMMARY_FAILURE_PREFIXES = [
     "AI summarizer is not configured",
@@ -242,8 +249,8 @@ async def search(
         random.shuffle(all_images)
         final_images = all_images[:limit]
         response_payload = StandardResponse(
-            success=True, code=200, message="OK",
-            data={"query": q, "images": [img.model_dump() for img in final_images]}
+            code=200, message="OK",
+            data={"images": [img.model_dump() for img in final_images]}
         )
         return JSONResponse(content=response_payload.model_dump())
 
@@ -286,7 +293,7 @@ async def search(
         
         if not all_results:
             response_payload = StandardResponse(
-                success=False, code=404,
+                code=404,
                 message=f"No search results found for the query: '{q}'",
                 data=None
             )
@@ -334,29 +341,28 @@ async def search(
                     logging.warning(f"增强任务未能从 {item_to_enhance.get('link')} 获取到内容。")
 
         # 尝试生成AI摘要
-        summary_text = None
+        summary_result = None
         try:
             # 将排序后最相关的结果传给摘要器
-            summary_text = await generate_summary(q, deduped_by_url)
+            summary_result = await generate_summary(q, deduped_by_url)
         except Exception as e:
             logging.error(f"Summarization process threw a critical exception: {e}", exc_info=True)
-            summary_text = f"Summarization process failed with an exception: {e}"
-
-        is_summary_successful = (
-            summary_text and
-            not any(summary_text.startswith(prefix) for prefix in SUMMARY_FAILURE_PREFIXES)
-        )
+            summary_result = f"Summarization process failed with an exception: {e}"
+        is_summary_successful = isinstance(summary_result, dict)
 
         if is_summary_successful:
-            logging.info(f"Successfully generated summary for query: '{q}'")
+            logging.info(f"Successfully generated summary with citations for query: '{q}'")
+            summary_data = SummaryResult(**summary_result)
             response_payload = StandardResponse(
-                success=True, code=200, message="OK",
-                data={"query": q, "results": summary_text}
+                code=200, message="OK",
+                data={
+                   # "query": q,
+                    "results": summary_data.model_dump()
+                }
             )
             return JSONResponse(content=response_payload.model_dump())
         else:
-            # 回退到返回原始结果列表
-            logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw results. Reason: {summary_text}")
+            logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw results. Reason: {summary_result}")
 
             # 内容去重和最终裁剪
             content_filtered_results = content_dedupe(deduped_by_url)
@@ -372,8 +378,8 @@ async def search(
                 })
 
             response_payload = StandardResponse(
-                success=True, code=200, message="OK",
-                data={"query": q, "results": i_data}
+                code=200, message="OK",
+                data={"results": i_data}
             )
             return JSONResponse(content=response_payload.model_dump())
 

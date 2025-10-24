@@ -53,12 +53,29 @@
     *   **文本搜索 - 摘要成功**:
         ```json
         {
-          "success": true,
           "code": 200,
           "message": "OK",
           "data": {
-            "query": "FastAPI最佳实践",
-            "results": "FastAPI 是一个现代、高性能的 Python Web 框架..."
+            "results": {
+              "summary": "FastAPI 是一个现代、高性能的 Python Web 框架，基于 Starlette 和 Pydantic 构建 [1, 2]。它的核心优势在于通过类型提示实现的高性能和自动生成的交互式API文档 [3]。",
+              "sources": [
+                {
+                  "id": 1,
+                  "title": "FastAPI Best Practices - Real Python",
+                  "url": "https://realpython.com/fastapi-best-practices/"
+                },
+                {
+                  "id": 2,
+                  "title": "A Comprehensive Guide to FastAPI Best Practices - ...",
+                  "url": "https://example.com/fastapi-guide"
+                },
+                {
+                  "id": 3,
+                  "title": "FastAPI 官网文档 - Tiangolo",
+                  "url": "https://fastapi.tiangolo.com/"
+                },
+              ]
+            }
           }
         }
         ```
@@ -66,11 +83,9 @@
     *   **文本搜索 - 回退列表**:
         ```json
         {
-          "success": true,
           "code": 200,
           "message": "OK",
           "data": {
-            "query": "FastAPI最佳实践",
             "results": [
               {
                 "title": "FastAPI Best Practices - Real Python",
@@ -90,11 +105,9 @@
     *   **图片搜索 - 成功示例**:
         ```json
         {
-          "success": true,
           "code": 200,
           "message": "OK",
           "data": {
-            "query": "风景壁纸",
             "images": [
               {
                 "title": "4K高清唯美风景壁纸 - Pexels",
