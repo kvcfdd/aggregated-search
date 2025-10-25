@@ -8,7 +8,7 @@ from http_clients import get_cffi_session
 async def search_bing(query: str, limit: int | None = None) -> list[dict]:
     if limit is None:
         limit = settings.PER_PROVIDER_FETCH_TEXT
-    DEFAULT_BING_URL = "https://www.bing.com"
+    DEFAULT_BING_URL = "https://cn.bing.com"
     BASE_URL = settings.BING_REVERSE_PROXY or DEFAULT_BING_URL
     logging.info(f"Using Bing endpoint: {BASE_URL}")
     

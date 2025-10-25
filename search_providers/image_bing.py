@@ -36,11 +36,11 @@ async def search_bing_images(query: str, limit: int | None = None) -> list[dict]
     if limit is None:
         limit = settings.PER_PROVIDER_FETCH_IMAGE
     """异步地从 Bing.com 直接抓取图片搜索结果。"""
-    DEFAULT_BING_URL = "https://www.bing.com"
+    DEFAULT_BING_URL = "https://cn.bing.com"
     BASE_URL = settings.BING_REVERSE_PROXY or DEFAULT_BING_URL
     
     search_url = f"{BASE_URL}/images/search?q={quote_plus(query)}&mkt=zh-CN&first=1"
-    logging.info(f"Searching Bing Images with query: '{query}'")
+    logging.info(f"Searching bing Images with query: '{query}'")
 
     headers = {
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
