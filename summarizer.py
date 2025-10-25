@@ -18,7 +18,7 @@ async def generate_summary(query: str, search_results: list[dict]) -> dict | str
     if not settings.GOOGLE_API_KEY or "default" in settings.GOOGLE_API_KEY:
         return "AI summarizer is not configured. Please provide a GOOGLE_API_KEY."
 
-    model_name = "gemini-2.0-flash"
+    model_name = "gemini-flash-latest"
     api_url = f"{GEMINI_API_BASE_URL}/v1beta/models/{model_name}:generateContent"
     
     context = ""
