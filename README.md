@@ -1,6 +1,39 @@
-# aggregated-search API
+# aggregated-search
 
-一个轻量级的聚合搜索API。
+一个轻量级、可扩展的聚合搜索服务。
+
+### 核心特性
+
+- 多源聚合：异步调用多个搜索/图片源（示例子模块见 `search_providers/`）。
+- 统一响应：对不同提供者的结果做规范化，返回一致的数据结构。
+- 可扩展：通过在 `search_providers` 下添加新模块可以接入更多搜索引擎（通过test_single_provider进行测试）。
+
+### 数据流
+
+```text
+HTTP 请求 (q, type)
+│
+▼
+[ FastAPI Endpoint: /search ]
+│
+▼
+[ 并发请求: Provider (DDG, Bing, Baidu...) ] ──> 聚合原始结果
+│
+▼
+[ 智能处理管道 ]
+│ 1. BM25 算法智能排序
+│ 2. URL 规范化去重
+│ 3. 内容相似度去重
+│ 4. (可选) "enhance" 模式深度抓取
+│
+▼
+[ 分支逻辑 ]
+├─ (AI摘要成功) ──> [ Gemini API ] ──> 生成带引用的摘要
+└─ (AI摘要失败) ──> 格式化排序后的结果列表
+│
+▼
+[ HTTP 响应 ]
+```
 
 ### 快速开始
 
@@ -21,7 +54,7 @@
 3.  运行服务：
 
     ```bash
-    uvicorn main:app --reload --host 0.0.0.0 --port 8000
+    uvicorn main:app
     ```
 
 ### API 概览
@@ -32,48 +65,36 @@
     -   `q` (string, **必需**): 查询词。
     -   `type` (string, 可选): `'text'` 或 `'image'` (默认 `'text'`)。
     -   `limit` (int, 可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
-    -   `enhance` (string, 可选): 深入请求 `'true'` 或 `'false'` (默认 `'false'`)。
-
-    **enhance** 参数会有额外轻微延迟
+    -   `enhance` (string, 可选): 深入请求 `true` 或 `false` (默认 `false`)。
 
 -   **请求示例**:
 
-    *   **文本搜索**:
+    *   **网页搜索**:
         ```bash
-        curl -X GET "http://127.0.0.1:8000/search?type=text&q=FastAPI最佳实践"
+        curl -X GET "http://127.0.0.1:8000/search?type=text&q=搜索关键词"
         ```
 
     *   **图片搜索**:
         ```bash
-        curl -X GET "http://127.0.0.1:8000/search?type=image&q=风景壁纸"
+        curl -X GET "http://127.0.0.1:8000/search?type=image&q=搜索关键词"
         ```
 
 -   **返回示例**:
 
-    *   **文本搜索 - 摘要成功**:
+    *   **网页搜索 - 摘要成功**:
         ```json
         {
           "code": 200,
           "message": "OK",
           "data": {
             "results": {
-              "summary": "FastAPI 是一个现代、高性能的 Python Web 框架，基于 Starlette 和 Pydantic 构建 [1, 2]。它的核心优势在于通过类型提示实现的高性能和自动生成的交互式API文档 [3]。",
+              "summary": "...",
               "sources": [
-                {
-                  "id": 1,
-                  "title": "FastAPI Best Practices - Real Python",
-                  "url": "https://realpython.com/fastapi-best-practices/"
-                },
-                {
-                  "id": 2,
-                  "title": "A Comprehensive Guide to FastAPI Best Practices - ...",
-                  "url": "https://example.com/fastapi-guide"
-                },
-                {
-                  "id": 3,
-                  "title": "FastAPI 官网文档 - Tiangolo",
-                  "url": "https://fastapi.tiangolo.com/"
-                },
+                {"id": 1, "title": "...", "url": "..."},
+                {"id": 2, "title": "...", "url": "..."},
+                {"id": 3, "title": "...", "url": "..."},
+                {"id": 4, "title": "...", "url": "..."},
+                {"id": 5, "title": "...", "url": "..."},
               ]
             }
           }
@@ -87,16 +108,11 @@
           "message": "OK",
           "data": {
             "results": [
-              {
-                "title": "FastAPI Best Practices - Real Python",
-                "description": "Learn about the best practices for building robust and maintainable APIs with FastAPI...",
-                "url": "https://realpython.com/fastapi-best-practices/"
-              },
-              {
-                "title": "A Comprehensive Guide to FastAPI Best Practices - ...",
-                "description": "Explore dependency injection, testing, project structure, and more to build production-ready FastAPI applications.",
-                "url": "https://example.com/fastapi-guide"
-              }
+              {"title": "...", "description": "...", "url": "..."},
+              {"title": "...", "description": "...", "url": "..."},
+              {"title": "...", "description": "...", "url": "..."},
+              {"title": "...", "description": "...", "url": "..."},
+              {"title": "...", "description": "...", "url": "..."}
             ]
           }
         }
@@ -109,16 +125,11 @@
           "message": "OK",
           "data": {
             "images": [
-              {
-                "title": "4K高清唯美风景壁纸 - Pexels",
-                "source": "pexels.com",
-                "url": "https://images.pexels.com/photos/12345/landscape.jpeg"
-              },
-              {
-                "title": "瑞士山脉湖泊风景桌面壁纸",
-                "source": "wallpaperhub.app",
-                "url": "https://wallpaperhub.app/images/swiss-mountains.jpg"
-              }
+              {"title": "...", "source": "...", "url": "..."},
+              {"title": "...", "source": "...", "url": "..."},
+              {"title": "...", "source": "...", "url": "..."},
+              {"title": "...", "source": "...", "url": "..."},
+              {"title": "...", "source": "...", "url": "..."}
             ]
           }
         }
