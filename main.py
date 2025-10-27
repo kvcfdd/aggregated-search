@@ -212,7 +212,7 @@ def content_dedupe(items: list[dict], threshold: float | None = None) -> list[di
 )
 async def search(
     q: str = Query(..., description="搜索查询词。"),
-    type: Literal['text', 'image'] = Query('text', description="搜索类型：'text' 或 'image'。"),
+    type: Literal['Information', 'image'] = Query('Information', description="搜索类型：'Information' 或 'image'。"),
     limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。"),
     enhance: bool = Query(False, description="是否进行内容增强。如果结果中存在百度百科，则优先增强；否则，尝试增强排名第一的结果。此过程会增加响应时间。")
 ):
@@ -254,7 +254,7 @@ async def search(
         )
         return JSONResponse(content=response_payload.model_dump())
 
-    elif type == 'text':
+    elif type == 'Information':
         tasks = [
             text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH_TEXT),
             text_bing.search_bing(q, settings.PER_PROVIDER_FETCH_TEXT),

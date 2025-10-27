@@ -63,7 +63,7 @@ HTTP 请求 (q, type)
 
 -   **参数**:
     -   `q` (string, **必需**): 查询词。
-    -   `type` (string, 可选): `'text'` 或 `'image'` (默认 `'text'`)。
+    -   `type` (string, 可选): `Information` 或 `image` (默认 `Information`)。
     -   `limit` (int, 可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
     -   `enhance` (string, 可选): 深入请求 `true` 或 `false` (默认 `false`)。
 
@@ -71,7 +71,7 @@ HTTP 请求 (q, type)
 
     *   **网页搜索**:
         ```bash
-        curl -X GET "http://127.0.0.1:8000/search?type=text&q=搜索关键词"
+        curl -X GET "http://127.0.0.1:8000/search?type=Information&q=搜索关键词"
         ```
 
     *   **图片搜索**:

@@ -21,8 +21,9 @@ async def fetch_baike_content(url: str) -> str | None:
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        summary_div = soup.select_one('div.lemmaSummary_vu0OO')
+        summary_div = soup.select_one('div.J-summary')
         if not summary_div:
+            logging.warning("未能找到百度百科的摘要部分 (J-summary)，页面结构可能已更改。")
             return None
 
         for sup in summary_div.select('sup'):
@@ -31,7 +32,7 @@ async def fetch_baike_content(url: str) -> str | None:
         
         all_content_parts = [summary_text]
 
-        first_heading = soup.select_one("div.paraTitle_A4zIw.level-1_vALZK")
+        first_heading = soup.select_one("div[data-level='1']")
 
         if first_heading:
             heading_text = first_heading.get_text(strip=True)
@@ -42,7 +43,7 @@ async def fetch_baike_content(url: str) -> str | None:
                 if not isinstance(sibling, Tag):
                     continue
 
-                if 'level-1_vALZK' in sibling.get('class', []):
+                if sibling.get('data-level') == '1':
                     break
 
                 for sup in sibling.select('sup'):
