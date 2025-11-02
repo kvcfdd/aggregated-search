@@ -13,7 +13,6 @@ BASE_URL = settings.DIMTOWN_REVERSE_PROXY or DEFAULT_DIMTOWN_URL
 
 async def get_images_from_detail_page(session: AsyncSession, detail_url: str) -> list[dict]:
     try:
-        logging.info(f"正在抓取次元小镇详情页: {detail_url}")
         response = await session.get(detail_url, impersonate="chrome120", timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -25,11 +24,11 @@ async def get_images_from_detail_page(session: AsyncSession, detail_url: str) ->
         # 定位到包含图片的核心内容区域
         content_div = soup.select_one("div.content#content")
         if not content_div:
-            logging.warning(f"在页面 {detail_url} 中未找到ID为 'content' 的内容区域")
+           # logging.warning(f"在页面 {detail_url} 中未找到ID为 'content' 的内容区域")
             return []
 
         images = []
-        # 根据您提供的HTML结构，图片链接位于 a 标签中
+        # 图片链接位于 a 标签中
         image_links = content_div.select("p > a[href]")
 
         for i, link in enumerate(image_links):
@@ -65,7 +64,7 @@ async def search_dimtown_images(query: str, limit: int | None = None) -> list[di
     post_limit = 10 
     
     search_url = f"{BASE_URL}/?s={quote_plus(query)}"
-    logging.info(f"正在使用查询词搜索次元小镇: '{query}'")
+    # logging.info(f"正在使用查询词搜索次元小镇: '{query}'")
     session = get_cffi_session()
 
     try:
@@ -77,7 +76,7 @@ async def search_dimtown_images(query: str, limit: int | None = None) -> list[di
         # 定位到包含文章列表的区域
         post_items = soup.select("div.update_area ul.update_area_lists > li")
         if not post_items:
-            logging.warning(f"次元小镇未能找到关于 '{query}' 的任何文章。")
+           # logging.warning(f"次元小镇未能找到关于 '{query}' 的任何文章。")
             return []
 
         tasks = []
@@ -92,17 +91,17 @@ async def search_dimtown_images(query: str, limit: int | None = None) -> list[di
                 tasks.append(get_images_from_detail_page(session, detail_url))
 
         if not tasks:
-            logging.warning(f"从次元小镇搜索结果中未能提取到任何有效的文章链接。")
+           # logging.warning(f"从次元小镇搜索结果中未能提取到任何有效的文章链接。")
             return []
             
         # 并发执行所有详情页的抓取任务
-        logging.info(f"发现 {len(tasks)} 篇文章，正在并发抓取图片...")
+       # logging.info(f"发现 {len(tasks)} 篇文章，正在并发抓取图片...")
         results_from_pages = await asyncio.gather(*tasks)
 
         # 将所有页面返回的图片列表合并成一个扁平的列表
         all_images = [image for page_images in results_from_pages for image in page_images]
         
-        logging.info(f"成功从次元小镇抓取到 {len(all_images)} 张图片。")
+       # logging.info(f"成功从次元小镇抓取到 {len(all_images)} 张图片。")
         return all_images
 
     except Exception as e:
