@@ -17,7 +17,7 @@ HTTP 请求 (q, type)
 [ FastAPI Endpoint: /search ]
 │
 ▼
-[ 并发请求: Provider (DDG, Bing, Baidu...) ] ──> 聚合原始结果
+[ 并发请求: Provider (搜索源...) ] ──> 聚合原始结果
 │
 ▼
 [ 智能处理管道 ]
@@ -62,10 +62,10 @@ HTTP 请求 (q, type)
 #### `GET /search`
 
 -   **参数**:
-    -   `q` (string, **必需**): 查询词。
-    -   `type` (string, 可选): `Information` 或 `image` (默认 `Information`)。
-    -   `limit` (int, 可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
-    -   `enhance` (string, 可选): 深入请求 `true` 或 `false` (默认 `false`)。
+    -   `q` (**必需**): 查询词。
+    -   `type` (可选): `Information` 或 `image` (默认 `Information`)。
+    -   `limit` (可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
+    -   `enhance` (type=Information可选): 深入请求 `true` 或 `false` (默认 `false`)。
 
 -   **请求示例**:
 
