@@ -18,7 +18,7 @@ from curl_cffi.requests import AsyncSession
 import http_clients
 
 from config import settings
-from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing, image_pixiv, image_yandex, image_dimtown
+from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing, image_pixiv, image_yandex, image_dimtown, image_acg66 
 from summarizer import generate_summary
 from page_parser import fetch_baike_content, fetch_and_clean_page_content
 
@@ -221,17 +221,17 @@ async def search(
 
     if type == 'image':
         tasks = [
-            image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
-            image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
+           # image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
+           # image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
             image_pixiv.search_pixiv_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
-            image_yandex.search_yandex_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
-            image_dimtown.search_dimtown_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
+           # image_yandex.search_yandex_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
+           # image_dimtown.search_dimtown_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
+            image_acg66.search_acg66_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
         ]
         
         results_from_providers = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_images, seen_originals = [], set()
-        query_lower = q.lower()
         for result_list in results_from_providers:
             if isinstance(result_list, Exception):
                 logging.warning(f"An image search provider failed: {result_list}")
@@ -240,7 +240,7 @@ async def search(
             for item in result_list:
                 original_url = item.get('original')
                 title = item.get("title") or ""
-                if original_url and original_url not in seen_originals and query_lower in title.lower():
+                if original_url and original_url not in seen_originals:
                     image_data = {
                         "title": title,
                         "source": item.get("source"),
