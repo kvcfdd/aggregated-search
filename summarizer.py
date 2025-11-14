@@ -18,16 +18,17 @@ async def generate_summary(query: str, search_results: list[dict]) -> dict | str
     if not settings.GOOGLE_API_KEY or "default" in settings.GOOGLE_API_KEY:
         return "AI summarizer is not configured. Please provide a GOOGLE_API_KEY."
 
-    model_name = "gemini-2.5-flash-lite"
+    model_name = "gemini-2.0-flash"
     api_url = f"{GEMINI_API_BASE_URL}/v1beta/models/{model_name}:generateContent"
     
     context = ""
     sources_for_model = []
-    for i, result in enumerate(search_results[:10], 1):
+
+    for i, result in enumerate(search_results, 1):
         title = clean_text(result.get('title', ''))
-        snippet = clean_text(result.get('snippet', ''))
+        snippet = result.get('snippet', '')
         link = result.get('link')
-        
+
         if title and snippet and link:
             context += f"Source [{i}]:\nTitle: {title}\nURL: {link}\nContent: {snippet}\n\n"
             sources_for_model.append({
@@ -58,7 +59,7 @@ async def generate_summary(query: str, search_results: list[dict]) -> dict | str
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 10000},
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},

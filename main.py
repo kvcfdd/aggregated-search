@@ -205,23 +205,21 @@ def content_dedupe(items: list[dict], threshold: float | None = None) -> list[di
     return kept_items
 
 @app.get("/search",
-         summary="执行聚合搜索，优先返回AI摘要",
+         summary="聚合搜索接口",
          response_model=StandardResponse,
-         description=("执行文本或图片搜索。对于文本搜索，服务会聚合、排序、去重多个来源的结果，"
-                      "并优先尝试生成AI摘要。如果摘要失败，则返回处理后的搜索结果列表。")
+         description=("执行聚合搜索，支持信息和图片两种类型。")
 )
 async def search(
     q: str = Query(..., description="搜索查询词。"),
     type: Literal['Information', 'image'] = Query('Information', description="搜索类型：'Information' 或 'image'。"),
-    limit: int = Query(10, ge=1, le=100, description="最终返回的结果数量上限。"),
-    enhance: bool = Query(False, description="是否进行内容增强。如果结果中存在百度百科，则优先增强；否则，尝试增强排名第一的结果。此过程会增加响应时间。")
+    limit: int = Query(10, ge=1, le=100, description="返回结果数量上限，范围1-100。")
 ):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty.")
 
     if type == 'image':
         tasks = [
-           # image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
+            image_serpapi.search_images_serpapi(q, settings.PER_PROVIDER_FETCH_IMAGE),
            # image_bing.search_bing_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
             image_pixiv.search_pixiv_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
            # image_yandex.search_yandex_images(q, settings.PER_PROVIDER_FETCH_IMAGE),
@@ -258,6 +256,8 @@ async def search(
         return JSONResponse(content=response_payload.model_dump())
 
     elif type == 'Information':
+        NUM_TO_ENHANCE = 3 # 固定深度解析排名最前的3条结果
+
         tasks = [
             text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH_TEXT),
             text_bing.search_bing(q, settings.PER_PROVIDER_FETCH_TEXT),
@@ -320,34 +320,40 @@ async def search(
         # 重新组合列表，百科来源的在最前面
         deduped_by_url = baike_items + other_items
 
-        if enhance and deduped_by_url:
-            item_to_enhance = None
-            task_to_run = None
-            if baike_items:
-                item_to_enhance = baike_items[0]
-                link = item_to_enhance.get('link', '')
-                task_to_run = fetch_baike_content(link)
-                logging.info(f"增强模式: 发现百科链接，尝试抓取 {link}")
-            else:
-                item_to_enhance = deduped_by_url[0]
-                link = item_to_enhance.get('link', '')
-                task_to_run = fetch_and_clean_page_content(link)
-                logging.info(f"增强模式: 未发现百科链接，尝试对首个结果进行深度请求: {link}")
+        if deduped_by_url:
+            items_to_enhance = deduped_by_url[:NUM_TO_ENHANCE]
 
-            if task_to_run and item_to_enhance:
-                enhanced_content = await task_to_run
-                if enhanced_content:
-                    original_snippet = item_to_enhance.get('snippet', '')
-                    item_to_enhance['snippet'] = enhanced_content
-                    logging.info(f"成功增强结果。内容长度从 {len(original_snippet)} 变为 {len(enhanced_content)}。")
+            fetch_tasks = []
+            for item in items_to_enhance:
+                link = item.get('link', '')
+
+                referer = "https://www.bing.com/"
+                if "baidu.com" in link:
+                    referer = "https://www.baidu.com/"
+
+                if "baike.baidu.com" in link:
+                    fetch_tasks.append(fetch_baike_content(link, referer="https://www.baidu.com/"))
                 else:
-                    logging.warning(f"增强任务未能从 {item_to_enhance.get('link')} 获取到内容。")
+                    fetch_tasks.append(fetch_and_clean_page_content(link, referer=referer))
 
+            if fetch_tasks: 
+                enhanced_contents = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                
+                for i, content in enumerate(enhanced_contents):
+                    item = items_to_enhance[i]
+                    if isinstance(content, Exception):
+                        logging.warning(f"深度抓取任务失败 {item.get('link')}: {content}")
+                    elif content:
+                        original_snippet_len = len(item.get('snippet', ''))
+                        item['snippet'] = content
+                        logging.info(f"成功增强结果 {item.get('link')}。内容长度从 {original_snippet_len} 变为 {len(content)}。")
+                    else:
+                        logging.warning(f"深度抓取任务未能从 {item.get('link')} 获取到有效内容。")
         # 尝试生成AI摘要
         summary_result = None
         try:
-            # 将排序后最相关的结果传给摘要器
-            summary_result = await generate_summary(q, deduped_by_url)
+            results_for_summary = deduped_by_url[:limit]
+            summary_result = await generate_summary(q, results_for_summary)
         except Exception as e:
             logging.error(f"Summarization process threw a critical exception: {e}", exc_info=True)
             summary_result = f"Summarization process failed with an exception: {e}"
@@ -359,7 +365,6 @@ async def search(
             response_payload = StandardResponse(
                 code=200, message="OK",
                 data={
-                   # "query": q,
                     "results": summary_data.model_dump()
                 }
             )
@@ -367,14 +372,12 @@ async def search(
         else:
             logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw results. Reason: {summary_result}")
 
-            # 内容去重和最终裁剪
             content_filtered_results = content_dedupe(deduped_by_url)
             final_results = content_filtered_results[:limit]
             
             i_data = []
             for i, result in enumerate(final_results, 1):
                 i_data.append({
-                   # "source": i,
                     "title": result.get('title'),
                     "description": result.get('snippet'),
                     "url": result.get('link')
