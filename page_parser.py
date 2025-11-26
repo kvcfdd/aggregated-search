@@ -1,111 +1,67 @@
 # page_parser.py
 import logging
 import re
-from bs4 import BeautifulSoup, Comment, Tag
+from bs4 import BeautifulSoup
+from readability import Document
+from markdownify import markdownify as md
 from http_clients import get_cffi_session
-
-async def fetch_baike_content(url: str, referer: str | None = None) -> str | None:
-    if "baike.baidu.com" not in url:
-        return None
-    
-    session = get_cffi_session()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    }
-    if referer:
-        headers['Referer'] = referer
-    
-    try:
-        logging.info(f"正在增强内容，抓取百科页面: {url} (Referer: {referer})")
-        response = await session.get(url, headers=headers, impersonate="edge101", timeout=10)
-        response.raise_for_status()
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        summary_div = soup.select_one('div.J-summary')
-        if not summary_div:
-            logging.warning("未能找到百度百科的摘要部分 (J-summary)，页面结构可能已更改。")
-            return None
-
-        for sup in summary_div.select('sup'):
-            sup.decompose()
-        summary_text = summary_div.get_text(separator='\n', strip=True)
-        
-        all_content_parts = [summary_text]
-        first_heading = soup.select_one("div[data-level='1']")
-        if first_heading:
-            heading_text = first_heading.get_text(strip=True)
-            if heading_text:
-                all_content_parts.append(heading_text)
-            for sibling in first_heading.find_next_siblings():
-                if not isinstance(sibling, Tag) or sibling.get('data-level') == '1':
-                    break
-                for sup in sibling.select('sup'):
-                    sup.decompose()
-                sibling_text = sibling.get_text(separator='\n', strip=True)
-                if sibling_text:
-                    all_content_parts.append(sibling_text)
-        
-        return "\n\n".join(filter(None, all_content_parts)) or None
-
-    except Exception as e:
-        logging.warning(f"解析百科页面 {url} 时发生严重错误: {e}")
-        return None
 
 async def fetch_and_clean_page_content(url: str, referer: str | None = None) -> str | None:
     """
-    深度抓取通用网页，通过“内容定位优先”策略提取并清洗核心内容。
+    深度抓取网页，使用 readability 提取核心内容，
+    并转换为 Markdown 格式，保留文章结构供 LLM 阅读。
     """
     session = get_cffi_session()
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
     }
     if referer:
         headers['Referer'] = referer
 
     try:
-        logging.info(f"正在进行深度请求，抓取通用页面: {url}")
-        response = await session.get(url, headers=headers, impersonate="edge101", timeout=10)
-        response.raise_for_status()
+        logging.info(f"正在深度抓取页面: {url}")
+        # 下载静态 HTML
+        response = await session.get(url, headers=headers, impersonate="edge101", timeout=15)
+        
+        # 处理非 200 响应
+        if response.status_code != 200:
+            logging.warning(f"抓取失败 {url}: HTTP {response.status_code}")
+            return None
 
-        soup = BeautifulSoup(response.content, 'html.parser')
-        # 提取页面标题
-        page_title = soup.title.get_text(strip=True) if soup.title else ""
-        # 移除常见的噪音元素
-        selectors_to_remove = [
-            "script", "style", "header", "footer", "nav", "aside", "form", "button",
-            ".navbar", ".menu", ".sidebar", ".ad", ".ads", ".advertisement",
-            "#comments", ".comments", ".comment-section",
-            ".related-posts", ".related", ".footer-links", ".social-links",
-            "iframe", "noscript"
-        ]
-        for selector in selectors_to_remove:
-            for element in soup.select(selector):
-                element.decompose()
+        try:
+            html_content = response.text
+        except Exception:
+            # 如果自动解码失败，尝试强制解码
+            html_content = response.content.decode('utf-8', errors='ignore')
 
-        # 尝试定位主要内容区域
-        main_content_area = (
-            soup.find("main") or
-            soup.find("article") or
-            soup.select_one("[role='main']") or
-            soup.select_one("#content, .content, #main, .main-content, .post, .entry-content, .article-body, #article")
-        )
-        # 如果找不到特定区域，则回退到 body
-        extraction_target = main_content_area if main_content_area else soup.body
-        if not extraction_target:
-            # 如果连 body 都没有，返回标题
-            return page_title.strip() if page_title else None
-        # 从目标区域提取文本
-        body_text = extraction_target.get_text(separator='\n', strip=True)
-        # 处理文本，移除多余的空行
-        cleaned_text = re.sub(r'(\n\s*){3,}', '\n\n', body_text)
-        # 组合标题和正文
-        full_content = f"{page_title}\n\n{cleaned_text}"
-        return full_content.strip()
+        # 提取正文 HTML
+        doc = Document(html_content)
+        page_title = doc.title()
+        summary_html = doc.summary() 
+
+        # 预清洗
+        soup = BeautifulSoup(summary_html, 'html.parser')
+        
+        # 移除显而易见的垃圾
+        for tag in soup(['sup', 'script', 'style', 'iframe', 'noscript', 'form', 'button', 'input', 'nav', 'footer', 'aside']):
+            tag.decompose()
+
+        # 转 Markdown
+        content_md = md(str(soup), heading_style="ATX", strip=['img', 'a'])
+
+        # 后处理与验证
+        content_md = re.sub(r'\n{3,}', '\n\n', content_md).strip()
+        
+        # 防止 JS 渲染页面导致内容为空
+        if len(content_md) < 50:
+            logging.warning(f"页面 {url} 提取内容过短({len(content_md)} chars)，可能是纯JS渲染，放弃增强。")
+            return None
+
+        full_content = f"# {page_title}\n\n{content_md}"
+        return full_content
 
     except Exception as e:
-        logging.warning(f"解析通用页面 {url} 时发生严重错误: {e}")
+        # 仅记录警告，不阻断主流程
+        logging.warning(f"解析页面 {url} 时发生错误: {e}")
         return None

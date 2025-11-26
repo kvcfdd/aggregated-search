@@ -6,3 +6,5 @@ python-dotenv
 pydantic-settings
 curl_cffi
 jieba
+markdownify
+readability-lxml

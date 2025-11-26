@@ -1,7 +1,7 @@
 # aggregated-search
 
 ```bash
-git clone https://github.xn--6rtu33f.top/kvcfdd/aggregated-search.git
+git clone https://github.com/kvcfdd/aggregated-search.git
 cd aggregated-search
 pip install -r requirements.txt
 uvicorn main:app
