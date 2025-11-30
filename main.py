@@ -100,6 +100,7 @@ def reciprocal_rank_fusion(providers_results: list[list[dict]], k: int = 60) -> 
     使用倒数排名融合 (RRF) 算法合并结果。
     RRF score = sum(1 / (k + rank))
     如果同一个链接出现在多个源中，分数会叠加，从而提升排名。
+    针对被标记为 'penalized' (黑名单降权) 的条目，分数乘以惩罚系数。
     """
     fused_scores = {}
     items_map = {}
@@ -111,6 +112,7 @@ def reciprocal_rank_fusion(providers_results: list[list[dict]], k: int = 60) -> 
         for rank, item in enumerate(result_list):
             link = item.get('link')
             title = item.get('title') or ""
+            is_penalized = item.get('_is_penalized', False)
             
             if not link:
                 continue
@@ -125,13 +127,18 @@ def reciprocal_rank_fusion(providers_results: list[list[dict]], k: int = 60) -> 
                 continue
 
             if dedupe_key not in fused_scores:
-                fused_scores[dedupe_key] = 0
+                fused_scores[dedupe_key] = 0.0
                 items_map[dedupe_key] = item
                 seen_titles.add(clean_title)
             
-            # RRF 公式：1 / (常数 + 排名)
-            # rank 是 0-indexed，所以加 1
-            fused_scores[dedupe_key] += 1 / (k + rank + 1)
+            # 基础分数
+            score = 1 / (k + rank + 1)
+            
+            # 如果是黑名单条目，应用惩罚 (乘以 0.1)
+            if is_penalized:
+                score *= 0.1
+
+            fused_scores[dedupe_key] += score
 
     # 根据分数降序排序
     sorted_keys = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
@@ -200,10 +207,13 @@ async def search(
         # 预编译黑名单
         domain_blacklist = {domain.strip() for domain in settings.DOMAIN_BLACKLIST.split(',') if domain.strip()}
         title_blacklist = {kw.strip().lower() for kw in settings.TITLE_BLACKLIST.split(',') if kw.strip()}
+        
+        # 获取小写查询词
+        q_lower = q.strip().lower()
 
         cleaned_providers_lists = []
 
-        # 清洗、黑名单过滤、关键词优先
+        # 清洗、标记黑名单、关键词优先
         for result_list in raw_results_list:
             if isinstance(result_list, Exception):
                 logging.warning(f"A search provider failed: {result_list}")
@@ -222,21 +232,27 @@ async def search(
                 if not all([link, title, snippet]):
                     continue
                 
-                # 域名黑名单过滤
+                # 初始化降权标记
+                is_penalized = False
+
+                # 域名黑名单判定
                 if domain_blacklist:
                     try:
                         domain = urlparse(link).netloc.lower()
-                        if domain and any(blacklisted_domain in domain for blacklisted_domain in domain_blacklist):
-                            continue
+                        if domain:
+                            if any(bd in domain and bd not in q_lower for bd in domain_blacklist):
+                                is_penalized = True
                     except Exception:
                         pass
                 
-                # 标题黑名单过滤
-                if title_blacklist:
+                # 标题黑名单判定
+                if not is_penalized and title_blacklist:
                     title_lower = title.lower()
-                    if any(kw in title_lower for kw in title_blacklist):
-                        continue
+                    if any(kw in title_lower and kw not in q_lower for kw in title_blacklist):
+                        is_penalized = True
                 
+                # 写入标记，不删除条目
+                item['_is_penalized'] = is_penalized
                 filtered_list.append(item)
             
             # 单源内部重排 包含搜索词的标题优先
