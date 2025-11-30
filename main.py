@@ -16,8 +16,6 @@ import http_clients
 
 from config import settings
 from search_providers import text_ddg, text_bing, text_baidu, image_serpapi, image_bing, image_pixiv, image_yandex, image_dimtown, image_acg66 
-from summarizer import generate_summary
-from page_parser import fetch_and_clean_page_content
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -47,7 +45,6 @@ async def lifespan(app: FastAPI):
         await http_clients.cffi_session.close()
     logging.info("HTTP clients closed gracefully.")
 
-
 app = FastAPI(
     title="aggregated search API",
     description="一个聚合多个搜索源的API服务。",
@@ -64,25 +61,6 @@ class ImageSearchResult(BaseModel):
     source: str | None
     url: str | None
 
-class Source(BaseModel):
-    id: int
-    title: str | None
-    url: str | None
-
-class SummaryResult(BaseModel):
-    summary: str
-    sources: list[Source]
-
-# 定义摘要失败的标志性前缀，用于回退判断
-SUMMARY_FAILURE_PREFIXES = [
-    "AI summarizer is not configured",
-    "AI摘要器未能为此查询生成响应",
-    "与AI摘要器通信时发生严重错误",
-    "No valid search results found",
-    "与AI摘要器通信时发生HTTP错误",
-    "AI摘要器返回了意外的格式",
-]
-
 def get_base_url_for_dedupe(url: str) -> str:
     try:
         parsed = urlparse(url)
@@ -95,6 +73,9 @@ def get_base_url_for_dedupe(url: str) -> str:
         return url.strip().lower()
 
 def prioritize_results_with_keyword(results: list[dict], keyword: str) -> list[dict]:
+    """
+    单源结果预处理：将标题包含关键词的结果前置，优化后续排名权重。
+    """
     if not results:
         return []
     
@@ -107,7 +88,6 @@ def prioritize_results_with_keyword(results: list[dict], keyword: str) -> list[d
     
     for item in results:
         title = str(item.get('title', '')).lower()
-        # 简单包含匹配
         if keyword_lower in title:
             high_priority.append(item)
         else:
@@ -115,19 +95,48 @@ def prioritize_results_with_keyword(results: list[dict], keyword: str) -> list[d
             
     return high_priority + low_priority
 
-def interleave_results(providers_results: list[list[dict]]) -> list[dict]:
+def reciprocal_rank_fusion(providers_results: list[list[dict]], k: int = 60) -> list[dict]:
     """
-    混合排序：轮询各个源的结果。
+    使用倒数排名融合 (RRF) 算法合并结果。
+    RRF score = sum(1 / (k + rank))
+    如果同一个链接出现在多个源中，分数会叠加，从而提升排名。
     """
-    mixed = []
-    # 获取最长的结果列表长度
-    max_len = max((len(r) for r in providers_results), default=0)
+    fused_scores = {}
+    items_map = {}
     
-    for i in range(max_len):
-        for res_list in providers_results:
-            if i < len(res_list):
-                mixed.append(res_list[i])
-    return mixed
+    # 记录已处理的标题，防止不同URL但内容完全相同的情况
+    seen_titles = set()
+
+    for result_list in providers_results:
+        for rank, item in enumerate(result_list):
+            link = item.get('link')
+            title = item.get('title') or ""
+            
+            if not link:
+                continue
+
+            # URL 标准化去重
+            dedupe_key = get_base_url_for_dedupe(link)
+            clean_title = title.strip().lower()
+
+            # 标题完全匹配去重
+            # 防止不同参数的URL指向同一篇文章导致刷屏
+            if clean_title in seen_titles and dedupe_key not in items_map:
+                continue
+
+            if dedupe_key not in fused_scores:
+                fused_scores[dedupe_key] = 0
+                items_map[dedupe_key] = item
+                seen_titles.add(clean_title)
+            
+            # RRF 公式：1 / (常数 + 排名)
+            # rank 是 0-indexed，所以加 1
+            fused_scores[dedupe_key] += 1 / (k + rank + 1)
+
+    # 根据分数降序排序
+    sorted_keys = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
+    
+    return [items_map[key] for key in sorted_keys]
 
 @app.get("/search",
          summary="聚合搜索接口",
@@ -166,8 +175,8 @@ async def search(
                 if original_url and original_url not in seen_originals:
                     image_data = {
                         "title": title,
-                        "source": item.get("source"),
-                        "url": original_url
+                        "url": original_url,
+                        "source": item.get("source")
                     }
                     all_images.append(ImageSearchResult(**image_data))
                     seen_originals.add(original_url)
@@ -181,8 +190,6 @@ async def search(
         return JSONResponse(content=response_payload.model_dump())
 
     elif type == 'Information':
-        NUM_TO_ENHANCE = 1 # 固定深度解析排名最前的3条结果
-
         tasks = [
             text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH_TEXT),
             text_bing.search_bing(q, settings.PER_PROVIDER_FETCH_TEXT),
@@ -190,17 +197,54 @@ async def search(
         ]
         raw_results_list = await asyncio.gather(*tasks, return_exceptions=True)
 
-        valid_provider_results = []
+        # 预编译黑名单
+        domain_blacklist = {domain.strip() for domain in settings.DOMAIN_BLACKLIST.split(',') if domain.strip()}
+        title_blacklist = {kw.strip().lower() for kw in settings.TITLE_BLACKLIST.split(',') if kw.strip()}
+
+        cleaned_providers_lists = []
+
+        # 清洗、黑名单过滤、关键词优先
         for result_list in raw_results_list:
             if isinstance(result_list, Exception):
                 logging.warning(f"A search provider failed: {result_list}")
                 continue
-            if result_list:
-                # 单源重排：先将当前源中包含关键词的结果排在前面
-                prioritized_list = prioritize_results_with_keyword(result_list, q)
-                valid_provider_results.append(prioritized_list)
+            
+            if not result_list:
+                continue
 
-        if not valid_provider_results:
+            filtered_list = []
+            for item in result_list:
+                link = item.get('link')
+                title = item.get('title') or ""
+                snippet = item.get('snippet')
+
+                # 基础字段校验
+                if not all([link, title, snippet]):
+                    continue
+                
+                # 域名黑名单过滤
+                if domain_blacklist:
+                    try:
+                        domain = urlparse(link).netloc.lower()
+                        if domain and any(blacklisted_domain in domain for blacklisted_domain in domain_blacklist):
+                            continue
+                    except Exception:
+                        pass
+                
+                # 标题黑名单过滤
+                if title_blacklist:
+                    title_lower = title.lower()
+                    if any(kw in title_lower for kw in title_blacklist):
+                        continue
+                
+                filtered_list.append(item)
+            
+            # 单源内部重排 包含搜索词的标题优先
+            prioritized_list = prioritize_results_with_keyword(filtered_list, q)
+            if prioritized_list:
+                cleaned_providers_lists.append(prioritized_list)
+
+        if not cleaned_providers_lists:
             response_payload = StandardResponse(
                 code=404,
                 message=f"No search results found for the query: '{q}'",
@@ -208,123 +252,26 @@ async def search(
             )
             return JSONResponse(status_code=404, content=response_payload.model_dump())
 
-        # 混合排序
-        interleaved_results = interleave_results(valid_provider_results)
+        # 使用 RRF 算法融合多个源
+        final_ranked_results = reciprocal_rank_fusion(cleaned_providers_lists)
 
-        # 解析黑名单配置
-        domain_blacklist = {domain.strip() for domain in settings.DOMAIN_BLACKLIST.split(',') if domain.strip()}
-        title_blacklist = {kw.strip().lower() for kw in settings.TITLE_BLACKLIST.split(',') if kw.strip()}
+        # 截取最终结果
+        final_results = final_ranked_results[:limit]
         
-        final_deduped_results = []
-        seen_urls = set()
-        seen_titles = set()
+        # 格式化输出
+        output_data = []
+        for result in final_results:
+            output_data.append({
+                "title": result.get('title'),
+                "url": result.get('link'),
+                "description": result.get('snippet')
+            })
 
-        # 遍历混合后的结果进行过滤和去重
-        for item in interleaved_results:
-            link = item.get('link')
-            title = item.get('title') or ""
-            snippet = item.get('snippet')
-            
-            # 基础校验
-            if not all([link, title, snippet]):
-                continue
-            
-            # 域名黑名单过滤
-            if domain_blacklist:
-                try:
-                    domain = urlparse(link).netloc.lower()
-                    if domain and any(blacklisted_domain in domain for blacklisted_domain in domain_blacklist):
-                        continue
-                except Exception:
-                    pass
-
-            # 标题关键词黑名单过滤
-            if title_blacklist:
-                title_lower = title.lower()
-                if any(kw in title_lower for kw in title_blacklist):
-                    continue
-            
-            # URL 去重
-            dedupe_url_key = get_base_url_for_dedupe(link)
-            if dedupe_url_key in seen_urls:
-                continue
-            
-            # 标题去重
-            clean_title = title.strip().lower()
-            if clean_title in seen_titles:
-                continue
-
-            seen_urls.add(dedupe_url_key)
-            seen_titles.add(clean_title)
-            final_deduped_results.append(item)
-
-        # 准备进行深度抓取的数据
-        items_to_enhance = final_deduped_results[:NUM_TO_ENHANCE]
-
-        if items_to_enhance:
-            fetch_tasks = []
-            for item in items_to_enhance:
-                link = item.get('link', '')
-                referer = "https://www.bing.com/"
-                if "baidu.com" in link:
-                    referer = "https://www.baidu.com/"
-                fetch_tasks.append(fetch_and_clean_page_content(link, referer=referer))
-
-            if fetch_tasks: 
-                enhanced_contents = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-                
-                for i, content in enumerate(enhanced_contents):
-                    item = items_to_enhance[i]
-                    if isinstance(content, Exception):
-                        logging.warning(f"深度抓取任务失败 {item.get('link')}: {content}")
-                    elif content:
-                        original_snippet_len = len(item.get('snippet', ''))
-                        item['snippet'] = content
-                        logging.info(f"成功增强结果 {item.get('link')}。内容长度从 {original_snippet_len} 变为 {len(content)}。")
-                    else:
-                        logging.warning(f"深度抓取任务未能从 {item.get('link')} 获取到有效内容。")
-
-        # 尝试生成AI摘要
-        summary_result = None
-        try:
-            # 传递给摘要的数据
-            results_for_summary = final_deduped_results[:limit]
-            summary_result = await generate_summary(q, results_for_summary)
-        except Exception as e:
-            logging.error(f"Summarization process threw a critical exception: {e}", exc_info=True)
-            summary_result = f"Summarization process failed with an exception: {e}"
-        
-        is_summary_successful = isinstance(summary_result, dict)
-
-        if is_summary_successful:
-            logging.info(f"Successfully generated summary with citations for query: '{q}'")
-            summary_data = SummaryResult(**summary_result)
-            response_payload = StandardResponse(
-                code=200, message="OK",
-                data={
-                    "results": summary_data.model_dump()
-                }
-            )
-            return JSONResponse(content=response_payload.model_dump())
-        else:
-            logging.warning(f"Summarization failed for query: '{q}'. Falling back to raw results. Reason: {summary_result}")
-
-            # 回退：直接返回列表
-            final_results = final_deduped_results[:limit]
-            
-            i_data = []
-            for i, result in enumerate(final_results, 1):
-                i_data.append({
-                    "title": result.get('title'),
-                    "description": result.get('snippet'),
-                    "url": result.get('link')
-                })
-
-            response_payload = StandardResponse(
-                code=200, message="OK",
-                data={"results": i_data}
-            )
-            return JSONResponse(content=response_payload.model_dump())
+        response_payload = StandardResponse(
+            code=200, message="OK",
+            data={"results": output_data}
+        )
+        return JSONResponse(content=response_payload.model_dump())
 
 @app.get("/", include_in_schema=False)
 def read_root():

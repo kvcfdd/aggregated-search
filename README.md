@@ -28,38 +28,18 @@ uvicorn main:app
 
 -   **返回示例**:
 
-    *   **网页搜索 - 摘要成功**:
-        ```json
-        {
-          "code": 200,
-          "message": "OK",
-          "data": {
-            "results": {
-              "summary": "...",
-              "sources": [
-                {"id": 1, "title": "...", "url": "..."},
-                {"id": 2, "title": "...", "url": "..."},
-                {"id": 3, "title": "...", "url": "..."},
-                {"id": 4, "title": "...", "url": "..."},
-                {"id": 5, "title": "...", "url": "..."},
-              ]
-            }
-          }
-        }
-        ```
-
-    *   **文本搜索 - 回退列表**:
+    *   **文本搜索 - 成功示例**:
         ```json
         {
           "code": 200,
           "message": "OK",
           "data": {
             "results": [
-              {"title": "...", "description": "...", "url": "..."},
-              {"title": "...", "description": "...", "url": "..."},
-              {"title": "...", "description": "...", "url": "..."},
-              {"title": "...", "description": "...", "url": "..."},
-              {"title": "...", "description": "...", "url": "..."}
+              {"title": "...", "url": "...", "description": "..."},
+              {"title": "...", "url": "...", "description": "..."},
+              {"title": "...", "url": "...", "description": "..."},
+              {"title": "...", "url": "...", "description": "..."},
+              {"title": "...", "url": "...", "description": "..."}
             ]
           }
         }
@@ -72,11 +52,11 @@ uvicorn main:app
           "message": "OK",
           "data": {
             "images": [
-              {"title": "...", "source": "...", "url": "..."},
-              {"title": "...", "source": "...", "url": "..."},
-              {"title": "...", "source": "...", "url": "..."},
-              {"title": "...", "source": "...", "url": "..."},
-              {"title": "...", "source": "...", "url": "..."}
+              {"title": "...", "url": "...", "source": "..."},
+              {"title": "...", "url": "...", "source": "..."},
+              {"title": "...", "url": "...", "source": "..."},
+              {"title": "...", "url": "...", "source": "..."},
+              {"title": "...", "url": "...", "source": "..."}
             ]
           }
         }

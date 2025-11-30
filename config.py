@@ -10,11 +10,9 @@ class Settings(BaseSettings):
     )
 
     # API配置
-    GOOGLE_API_KEY: str = "default_google_key"
     SERPAPI_API_KEYS: str = "default_serpapi_key"
 
     # 反向代理配置
-    GEMINI_REVERSE_PROXY: str | None = None
     DDG_REVERSE_PROXY: str | None = None
     BING_REVERSE_PROXY: str | None = None
     BAIDU_REVERSE_PROXY: str | None = None
