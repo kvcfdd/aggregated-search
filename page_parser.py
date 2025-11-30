@@ -6,11 +6,35 @@ from readability import Document
 from markdownify import markdownify as md
 from http_clients import get_cffi_session
 
+def clean_html_and_to_md(html_content: str) -> str:
+    if not html_content:
+        return ""
+    
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        # 移除不必要的标签
+        tags_to_remove = [
+            'script', 'style', 'iframe', 'noscript', 
+            'form', 'button', 'input', 
+            'nav', 'footer', 'aside', 'header', 'menu',
+            'sup', 'meta', 'link', 'applet', 'object'
+        ]
+        
+        for tag in soup(tags_to_remove):
+            tag.decompose()
+
+        # 转 Markdown
+        content_md = md(str(soup), heading_style="ATX", strip=['img', 'a'])
+
+        # 移除多余的连续换行
+        content_md = re.sub(r'\n{3,}', '\n\n', content_md).strip()
+        
+        return content_md
+    except Exception as e:
+        logging.error(f"HTML 转 Markdown 失败: {e}")
+        return ""
+
 async def fetch_and_clean_page_content(url: str, referer: str | None = None) -> str | None:
-    """
-    深度抓取网页，使用 readability 提取核心内容，
-    并转换为 Markdown 格式，保留文章结构供 LLM 阅读。
-    """
     session = get_cffi_session()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
@@ -29,33 +53,41 @@ async def fetch_and_clean_page_content(url: str, referer: str | None = None) -> 
             logging.warning(f"抓取失败 {url}: HTTP {response.status_code}")
             return None
 
+        # 解码内容
         try:
             html_content = response.text
         except Exception:
             # 如果自动解码失败，尝试强制解码
             html_content = response.content.decode('utf-8', errors='ignore')
 
-        # 提取正文 HTML
+        if not html_content:
+            return None
+
+        # 初始化 Readability
         doc = Document(html_content)
         page_title = doc.title()
-        summary_html = doc.summary() 
 
-        # 预清洗
-        soup = BeautifulSoup(summary_html, 'html.parser')
-        
-        # 移除显而易见的垃圾
-        for tag in soup(['sup', 'script', 'style', 'iframe', 'noscript', 'form', 'button', 'input', 'nav', 'footer', 'aside']):
-            tag.decompose()
+        # 尝试提取核心正文
+        content_md = ""
+        try:
+            summary_html = doc.summary()
+            if summary_html and "<body></body>" not in summary_html:
+                content_md = clean_html_and_to_md(summary_html)
+        except Exception as e:
+            logging.warning(f"Readability 提取出错，准备回退: {e}")
 
-        # 转 Markdown
-        content_md = md(str(soup), heading_style="ATX", strip=['img', 'a'])
+        # 全文回退
+        if len(content_md) < 50:
+            logging.info(f"Readability 结果过短 ({len(content_md)} chars)，启用全文回退模式: {url}")
 
-        # 后处理与验证
-        content_md = re.sub(r'\n{3,}', '\n\n', content_md).strip()
-        
+            fallback_md = clean_html_and_to_md(html_content)
+
+            if len(fallback_md) > len(content_md):
+                content_md = fallback_md
+
         # 防止 JS 渲染页面导致内容为空
         if len(content_md) < 50:
-            logging.warning(f"页面 {url} 提取内容过短({len(content_md)} chars)，可能是纯JS渲染，放弃增强。")
+            logging.warning(f"页面 {url} 最终提取内容过短({len(content_md)} chars)，可能是纯JS渲染，放弃。")
             return None
 
         full_content = f"# {page_title}\n\n{content_md}"
