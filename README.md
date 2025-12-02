@@ -11,14 +11,14 @@ uvicorn main:app
 
 -   **参数**:
     -   `q` (**必需**): 查询词。
-    -   `type` (可选): `Information` 或 `image` (默认 `Information`)。
+    -   `type` (可选): `web` 或 `image` (默认 `web`)。
     -   `limit` (可选): 最终返回结果的条数 (默认 10, 范围 1–100)。
 
 -   **请求示例**:
 
     *   **网页搜索**:
         ```bash
-        curl -X GET "http://127.0.0.1:8000/search?type=Information&q=搜索关键词"
+        curl -X GET "http://127.0.0.1:8000/search?type=web&q=搜索关键词"
         ```
 
     *   **图片搜索**:

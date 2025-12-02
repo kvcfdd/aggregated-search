@@ -148,11 +148,11 @@ def reciprocal_rank_fusion(providers_results: list[list[dict]], k: int = 60) -> 
 @app.get("/search",
          summary="聚合搜索接口",
          response_model=StandardResponse,
-         description=("执行聚合搜索，支持信息和图片两种类型。")
+         description=("执行聚合搜索，支持网页和图片两种类型。")
 )
 async def search(
     q: str = Query(..., description="搜索查询词。"),
-    type: Literal['Information', 'image'] = Query('Information', description="搜索类型：'Information' 或 'image'。"),
+    type: Literal['web', 'image'] = Query('web', description="搜索类型：'web' 或 'image'。"),
     limit: int = Query(10, ge=1, le=100, description="返回结果数量上限，范围1-100。")
 ):
     if not q.strip():
@@ -196,7 +196,7 @@ async def search(
         )
         return JSONResponse(content=response_payload.model_dump())
 
-    elif type == 'Information':
+    elif type == 'web':
         tasks = [
             text_ddg.search_ddg(q, settings.PER_PROVIDER_FETCH_TEXT),
             text_bing.search_bing(q, settings.PER_PROVIDER_FETCH_TEXT),
