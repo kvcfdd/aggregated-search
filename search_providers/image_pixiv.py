@@ -41,7 +41,7 @@ async def get_artwork_details(
             return None
             
         artwork_body = data.get("body", {})
-        page_count = artwork_body.get("pageCount", 1)
+        # page_count = artwork_body.get("pageCount", 1)
 
         original_url_template = artwork_body.get("urls", {}).get("original")
         thumbnail_url = artwork_body.get("urls", {}).get("regular")
@@ -52,23 +52,17 @@ async def get_artwork_details(
         results = []
         page_url = f'{public_base_url}/artworks/{artwork_id}'
         
-        for i in range(page_count):
-            if "_p0" in original_url_template:
-                current_page_original_url = original_url_template.replace("_p0", f"_p{i}")
-            else:
-                if i > 0: break
-                current_page_original_url = original_url_template
+        # 仅获取第一张图片
+        final_original_url = rewrite_image_url(original_url_template)
+        final_thumbnail_url = rewrite_image_url(thumbnail_url)
 
-            final_original_url = rewrite_image_url(current_page_original_url)
-            final_thumbnail_url = rewrite_image_url(thumbnail_url)
-
-            results.append({
-                "title": f'{artwork_body.get("title")} (p{i+1})' if page_count > 1 else artwork_body.get("title"),
-                "source": page_url,
-                "link": page_url,
-                "original": final_original_url,
-                "thumbnail": final_thumbnail_url,
-            })
+        results.append({
+            "title": artwork_body.get("title"),
+            "source": page_url,
+            "link": page_url,
+            "original": final_original_url,
+            "thumbnail": final_thumbnail_url,
+        })
             
         return results
     except Exception as e:
